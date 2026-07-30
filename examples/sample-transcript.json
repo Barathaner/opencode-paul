@@ -1,0 +1,10 @@
+{
+  "segments": [
+    { "start": 0.0, "end": 4.2, "text": "Okay, let's start the sprint 4 planning meeting." },
+    { "start": 4.2, "end": 9.1, "text": "First decision: we ship the new auth flow before the billing rework." },
+    { "start": 9.1, "end": 14.0, "text": "Action item: Karl will implement the OAuth token refresh by Friday." },
+    { "start": 14.0, "end": 19.3, "text": "Action item: Sarah needs to write the migration for the users table." },
+    { "start": 19.3, "end": 24.0, "text": "We agreed the payment UI is blocked until the auth flow is merged." },
+    { "start": 24.0, "end": 28.5, "text": "Next phase after this sprint is the billing rework, targeting sprint 5." }
+  ]
+}

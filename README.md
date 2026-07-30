@@ -96,6 +96,50 @@ data to PAUL. Wire the MCP server in your `opencode.json`:
 
 Never hardcode tokens — use `{env:VAR}` and export the real value from your shell profile.
 
+## The meeting pipeline (`process_meetings.sh`)
+
+This is what PAUL was built for. `process_meetings.sh` takes a Whisper-style JSON
+transcript and drives OpenCode to turn it into Confluence notes + Jira tasks — but with
+PAUL as the **memory layer** so runs are *stateful* instead of blind:
+
+```bash
+./process_meetings.sh /path/to/transcript.json
+```
+
+The transcript is `{ "segments": [{ "text": "..." }, ...] }` (Whisper output). See
+[`examples/sample-transcript.json`](./examples/sample-transcript.json).
+
+What each run does, in order:
+
+1. **Pull memory** — imports the shared `AGENTSMEMORY` Confluence page and loads
+   `paul_list` / `paul_cursor`, so the agent knows every prior meeting, existing ticket,
+   and the current roadmap phase.
+2. **Meeting notes** — creates a `Meeting Notes: <date>` Confluence page in your space.
+3. **Action items → Jira, deduped** — extracts action items and only creates *new* Jira
+   tasks; ones PAUL already tracks are reused instead of duplicated. (Without PAUL, the old
+   script re-created the same tickets on every run.)
+4. **Record into PAUL** — `paul_init` writes the meeting summary + tickets into the store.
+5. **Push memory** — exports and updates the `AGENTSMEMORY` page, so the next run — or a
+   teammate on another machine — starts from this meeting's state.
+
+A `processed_files.csv` hash-tracker skips transcripts that were already processed. The
+script runs OpenCode from a dedicated project dir (`PAUL_PROJECT_DIR`, a git repo) so
+`.paul/memory.json` is a stable per-project store across runs.
+
+All paths and keys are environment-overridable (defaults in parentheses):
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `OPENCODE_BIN` | `~/.opencode/bin/opencode` | OpenCode binary |
+| `PAUL_AUTOMATION_DIR` | `~/opencode_automations` | base for logs + project |
+| `PAUL_PROJECT_DIR` | `$PAUL_AUTOMATION_DIR/paul-project` | holds `.paul/memory.json` |
+| `PAUL_CONFLUENCE_SPACE` | `SOFTWAREEN` | Confluence space key |
+| `PAUL_JIRA_PROJECT` | `KAN` | Jira project key |
+| `PAUL_AGENTSMEMORY_TITLE` | `AGENTSMEMORY` | shared memory page title |
+
+Requires the `mcp-atlassian` MCP server wired up (see below) and a working `opencode`
+model endpoint. Trigger it from a file watcher / cron / Teams webhook per new transcript.
+
 ## The store
 
 `<project-root>/.paul/memory.json` — an atomic-written JSON document:
