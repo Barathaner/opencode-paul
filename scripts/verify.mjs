@@ -48,17 +48,20 @@ await P.cursor.execute({ phase: "S4", note: "auth" }, ctx)
 ok(J(await P.cursor.execute({}, ctx)).cursor.phase === "S4", "cursor: persists")
 ok(J(await P.remove.execute({ id: a.id }, ctx)).remaining === 0, "remove: deletes entry")
 
-// 4) init import + dedup by externalId + epic typing.
+// 4) init import + dedup by externalId + epic typing + enriched meta.
 const r1 = J(await P.init.execute({
   cursorPhase: "P1",
-  tickets: [{ externalId: "KAN-5", title: "T", issueType: "Epic" }],
+  tickets: [{ externalId: "KAN-5", title: "T", issueType: "Epic", order: 10,
+              complexity: "High", priority: "Critical", timeEstimate: "3d" }],
   meetings: [{ externalId: "pg1", title: "M", summary: "s" }],
 }, ctx))
 ok(r1.imported.tickets.added === 1 && r1.imported.meetings.added === 1, "init: imports tickets + meetings")
 ok(J(await P.init.execute({ tickets: [{ externalId: "KAN-5", title: "T", status: "done", issueType: "Epic" }] }, ctx))
   .imported.tickets.updated === 1, "init: dedups by externalId (update in place)")
-ok(J(await P.list.execute({}, ctx)).entries.find((e) => e.meta.externalId === "KAN-5").type === "epic",
-  "init: Epic issueType → type=epic")
+const epic = J(await P.list.execute({}, ctx)).entries.find((e) => e.meta.externalId === "KAN-5")
+ok(epic.type === "epic", "init: Epic issueType → type=epic")
+ok(epic.meta.complexity === "High" && epic.meta.priority === "Critical" && epic.meta.timeEstimate === "3d",
+  "init: complexity/priority/timeEstimate stored in meta")
 
 // 5) Confluence AGENTSMEMORY round-trip.
 const e = J(await P.export_page.execute({}, ctx))

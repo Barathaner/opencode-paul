@@ -119,8 +119,18 @@ What each run does, in order:
    tasks; ones PAUL already tracks are reused instead of duplicated. (Without PAUL, the old
    script re-created the same tickets on every run.)
 4. **Record into PAUL** — `paul_init` writes the meeting summary + tickets into the store.
+   Each action item is enriched with **Complexity** (Low/Medium/High), **Priority**
+   (Low/Medium/High/Critical) and a **Time estimate** — written to real Jira fields
+   (`priority`, `timetracking.originalEstimate`, a `complexity-*` label) and carried in
+   PAUL `meta`. The agent assigns each ticket a PAUL `order` from those attributes.
 5. **Push memory** — exports and updates the `AGENTSMEMORY` page, so the next run — or a
    teammate on another machine — starts from this meeting's state.
+6. **Reorder the Jira board** — `scripts/reorder_board.sh` ranks the board to match PAUL's
+   `order`, so in the Atlassian web UI the **open / "Zu erledigen"** column (and a
+   **backlog** column if present) show tickets top-to-bottom in do-this-first order. It
+   only reranks `todo` + `backlog`; `in_progress`, `review`, `blocked` and `done` are left
+   untouched. mcp-atlassian has no rank tool, so this step calls the Jira Agile REST API
+   (`PUT /rest/agile/1.0/issue/rank`) directly — PAUL memory stays the source of truth.
 
 A `processed_files.csv` hash-tracker skips transcripts that were already processed. The
 script runs OpenCode from a dedicated project dir (`PAUL_PROJECT_DIR`, a git repo) so
@@ -136,6 +146,18 @@ All paths and keys are environment-overridable (defaults in parentheses):
 | `PAUL_CONFLUENCE_SPACE` | `SOFTWAREEN` | Confluence space key |
 | `PAUL_JIRA_PROJECT` | `KAN` | Jira project key |
 | `PAUL_AGENTSMEMORY_TITLE` | `AGENTSMEMORY` | shared memory page title |
+
+**Board reorder** (`scripts/reorder_board.sh`, called automatically in step 6, also runnable
+standalone) needs Jira REST credentials — reuse your Atlassian ones:
+
+| Env var | Purpose |
+|---------|---------|
+| `PAUL_JIRA_URL` | e.g. `https://your-team.atlassian.net` (falls back to `JIRA_URL`) |
+| `PAUL_JIRA_EMAIL` | Atlassian account email (falls back to `JIRA_USERNAME`) |
+| `ATLASSIAN_API_TOKEN` | Atlassian API token |
+| `PAUL_REORDER_STATUSES` | statuses to rerank (default `todo backlog`) |
+| `PAUL_JIRA_RANK_FIELD` | LexoRank field id (e.g. `customfield_10019`) if your instance needs it |
+| `DRY_RUN=1` | print the planned rank calls without touching Jira |
 
 Requires the `mcp-atlassian` MCP server wired up (see below) and a working `opencode`
 model endpoint. Trigger it from a file watcher / cron / Teams webhook per new transcript.

@@ -126,21 +126,44 @@ PHASE 1 — MEETING NOTES PAGE:
   containing: an overview, the key decisions, extracted action items, and the
   formatted transcript. Remember the returned pageId.
 
-PHASE 2 — ACTION ITEMS -> JIRA (dedup against PAUL):
+PHASE 2 — ACTION ITEMS -> JIRA (enriched + deduped against PAUL):
 - Extract every action item from the transcript.
+- For EACH action item, estimate these three attributes (use your judgement from
+  the transcript context; always include all three):
+  * Complexity: one of Low | Medium | High (implementation effort / uncertainty).
+  * Priority:   one of Low | Medium | High | Critical (business urgency).
+  * Time:       a Jira-style estimate string, e.g. "2h", "1d", "3d" (expected effort).
 - For each action item, check the paul_list results from PHASE 0. If an equivalent
   ticket already exists (same intent / matching title or meta.externalId), do NOT
-  create a duplicate — reuse the existing Jira key and update it if status changed.
+  create a duplicate — reuse the existing Jira key and update it (status + the three
+  attributes if they changed) via jira update_issue.
 - Only create a NEW Jira task in project "$JIRA_PROJECT" for genuinely new action items.
-- Collect the Jira key, title, and status for every created or matched ticket.
+  When creating (jira create_issue) put the attributes into REAL Jira fields via
+  additional_fields, and describe them in the description too:
+    * Priority   -> additional_fields: {"priority": {"name": "<Priority>"}}
+    * Time       -> additional_fields: {"timetracking": {"originalEstimate": "<Time>"}}
+    * Complexity -> additional_fields: {"labels": ["complexity-<low|medium|high>"]}
+      (Jira has no native complexity field; a label keeps it portable and filterable.)
+  Also prepend a line to the description: "Complexity: <C> | Priority: <P> | Estimate: <T>".
+- Collect for every created or matched ticket: Jira key, title, status, Complexity,
+  Priority, Time.
 
-PHASE 3 — RECORD INTO PAUL:
+PHASE 3 — RECORD INTO PAUL (with priority-driven order):
+- Decide each ticket's PAUL 'order' (lower = higher priority on the board = done first).
+  Rank by Priority first (Critical < High < Medium < Low), then by Complexity/Time as
+  a tiebreak, and respect any dependencies stated in the meeting (a blocker's
+  prerequisite comes first). Assign ascending order values (e.g. 10, 20, 30, ...).
 - Call paul_init ONCE with:
   * meetings: [{ externalId: "<Confluence pageId from PHASE 1>", title: "Meeting Notes: $MEETING_DATE",
                  summary: "<short summary: key decisions + action items + current status>",
                  date: "$MEETING_DATE", url: "<page url>" }]
   * tickets: [ for each ticket from PHASE 2: { externalId: "<JIRA-KEY>", title: "<summary>",
-               status: "<backlog|todo|in_progress|blocked|review|done>", issueType: "Task", url: "<issue url>" } ]
+               status: "<backlog|todo|in_progress|blocked|review|done>", order: <computed order>,
+               issueType: "Task", url: "<issue url>",
+               complexity: "<Low|Medium|High>", priority: "<Low|Medium|High|Critical>",
+               timeEstimate: "<e.g. 2h|1d>" } ]
+    (complexity/priority/timeEstimate are carried in each ticket's meta so PAUL memory
+     stays the source of truth for board ordering.)
   * cursorPhase / cursorNote: update these if this meeting moved the roadmap
     (e.g. a new sprint/phase was decided). Dedup is by externalId, so re-runs update in place.
 
@@ -150,6 +173,10 @@ PHASE 4 — PUSH MEMORY (sync AGENTSMEMORY so the next run/teammate sees this):
 - If not: confluence_create_page(space_key="$CONFLUENCE_SPACE", title="$AGENTSMEMORY_TITLE", <body>),
   then paul_remote(pageId=<new id>, spaceKey="$CONFLUENCE_SPACE") to remember it.
 - Pass the body verbatim — it contains the hidden JSON block that keeps memory lossless.
+
+NOTE ON BOARD ORDERING: you do NOT reorder the Jira board yourself (mcp-atlassian has
+no rank tool). Just make sure each todo/backlog ticket has the right PAUL 'order' in
+PHASE 3. The pipeline reorders the board deterministically from PAUL memory after you finish.
 
 Meeting Transcript:
 $TRANSCRIPT_TEXT
@@ -166,6 +193,24 @@ if [ $OPENCODE_EXIT_CODE -eq 0 ]; then
   echo "\"$TIMESTAMP\",\"$JSON_FILE\",\"$FILE_HASH\"" >> "$PROCESSED_TRACKER"
   log "Recorded $JSON_FILE to processed registry."
   log "PAUL memory updated; .paul/memory.json in $PROJECT_DIR and AGENTSMEMORY page are in sync."
+
+  # --- PHASE 5: reorder the Jira board to match PAUL memory ---
+  # mcp-atlassian has no rank tool, so we rank via the Agile REST API here.
+  # Only touches the todo (open / "Zu erledigen") and backlog columns; leaves
+  # in_progress / review / blocked / done untouched.
+  REORDER_SCRIPT="$(cd "$(dirname "$0")" && pwd)/scripts/reorder_board.sh"
+  if [ -x "$REORDER_SCRIPT" ]; then
+    log "Reordering Jira board from PAUL memory (todo + backlog columns)..."
+    PAUL_PROJECT_DIR="$PROJECT_DIR" \
+    PAUL_JIRA_URL="${PAUL_JIRA_URL:-${JIRA_URL:-}}" \
+    PAUL_JIRA_EMAIL="${PAUL_JIRA_EMAIL:-${JIRA_USERNAME:-}}" \
+    ATLASSIAN_API_TOKEN="${ATLASSIAN_API_TOKEN:-}" \
+      "$REORDER_SCRIPT" 2>&1 | tee -a "$LOG_FILE"
+    RC=${PIPESTATUS[0]}
+    [ "$RC" -eq 0 ] && log "Board reorder finished." || log "WARN: board reorder exited $RC (memory is still correct; check Jira creds/rank field)."
+  else
+    log "WARN: reorder_board.sh not found/executable at $REORDER_SCRIPT — skipping board reorder."
+  fi
 else
   log "ERROR: OpenCode execution failed with exit code $OPENCODE_EXIT_CODE."
 fi

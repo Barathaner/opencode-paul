@@ -28,6 +28,9 @@ When asked to "init/index the project from Atlassian" (or on first setup), do th
 5. Call `paul_init` ONCE with `meetings[]`, `tickets[]`, `cursorPhase`, `cursorNote`.
    Pass each item's stable `externalId` (Confluence page id / Jira key) so re-running
    dedupes and updates in place. Use `reset: true` only for a clean full re-index.
+   For tickets also pass `order` and (when known) `complexity` (Low|Medium|High),
+   `priority` (Low|Medium|High|Critical), and `timeEstimate` (e.g. 2h, 1d) — these are
+   stored in `meta` and drive board ordering. Lower `order` = higher on the board.
 6. Map Jira statuses to: backlog|todo|in_progress|blocked|review|done.
 
 After init, `paul_list` + `paul_cursor` give the next session an instant, short view of

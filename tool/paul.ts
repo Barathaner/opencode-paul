@@ -227,6 +227,9 @@ export const init = tool({
       details: S.string().optional().describe("Short description / context"),
       issueType: S.string().optional().describe("Jira issue type, e.g. Task, Story, Epic, Bug"),
       url: S.string().optional().describe("Link to the Jira issue"),
+      complexity: S.string().optional().describe("Estimated complexity: Low|Medium|High"),
+      priority: S.string().optional().describe("Business priority: Low|Medium|High|Critical"),
+      timeEstimate: S.string().optional().describe("Effort estimate, e.g. 2h, 1d, 3d"),
     })).optional().describe("Jira tickets to store as roadmap/board entries"),
   },
   async execute(args, ctx) {
@@ -244,11 +247,18 @@ export const init = tool({
     }
     let maxOrder = store.entries.reduce((m, e) => Math.max(m, e.order), 0)
 
+    // Drop undefined values so an update that omits a field doesn't clobber
+    // an existing stored value (e.g. re-running init on a ticket without
+    // re-specifying complexity/priority/timeEstimate must preserve them).
+    const clean = (o: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined))
+
     const upsert = (fields: Partial<Entry> & { externalId: string; type: string; title: string }) => {
       const existing = byExt.get(fields.externalId)
       if (existing) {
-        Object.assign(existing, fields, {
-          meta: { ...(existing.meta || {}), ...(fields.meta || {}), externalId: fields.externalId },
+        const { meta: fMeta, ...fRest } = fields
+        Object.assign(existing, clean(fRest as Record<string, unknown>), {
+          meta: { ...(existing.meta || {}), ...clean((fMeta || {}) as Record<string, unknown>), externalId: fields.externalId },
           updatedAt: now,
         })
         return { action: "updated", id: existing.id }
@@ -261,7 +271,7 @@ export const init = tool({
         order: fields.order ?? (maxOrder += 10),
         details: fields.details,
         tags: fields.tags,
-        meta: { ...(fields.meta || {}), externalId: fields.externalId },
+        meta: { ...clean((fields.meta || {}) as Record<string, unknown>), externalId: fields.externalId },
         createdAt: now,
         updatedAt: now,
       }
@@ -294,7 +304,15 @@ export const init = tool({
         order: t.order,
         details: t.details,
         tags: ["jira"],
-        meta: { source: "jira", externalId: t.externalId, issueType: t.issueType, url: t.url },
+        meta: {
+          source: "jira",
+          externalId: t.externalId,
+          issueType: t.issueType,
+          url: t.url,
+          complexity: t.complexity,
+          priority: t.priority,
+          timeEstimate: t.timeEstimate,
+        },
       })
       result.tickets[r.action as "added" | "updated"]++
     }
