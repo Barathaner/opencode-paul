@@ -10,6 +10,10 @@ scripts/.tmp/
 # PAUL runtime store (should be committed per-project by USERS, but never here)
 .paul/
 
+# PAUL secrets written by setup.sh — never commit
+paul.env
+*.bak.*
+
 # Editor / OS
 .DS_Store
 *.log

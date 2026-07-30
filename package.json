@@ -30,7 +30,10 @@
   "files": [
     "src/",
     "tool/",
+    "scripts/",
     "examples/",
+    "setup.sh",
+    "process_meetings.sh",
     "AGENTS.snippet.md",
     "README.md",
     "LICENSE"

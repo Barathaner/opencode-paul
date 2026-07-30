@@ -8,6 +8,44 @@ Instead of letting the agent scribble roadmap notes into prose (which drift and 
 PAUL gives it real verbs backed by an atomic per-project JSON store at
 `<project-root>/.paul/memory.json` — git-trackable, cross-session, no database.
 
+## Quick start
+
+One script installs everything, asks for your Atlassian details, checks them, and wires
+up OpenCode:
+
+```bash
+git clone https://github.com/KarlAugustinJahnel/opencode-paul.git
+cd opencode-paul
+./setup.sh
+```
+
+`setup.sh` will:
+
+1. Check/install prerequisites (`jq`, `curl`, Node, `opencode`, `uvx`).
+2. Install PAUL's nine tools into `~/.config/opencode/tools/`.
+3. Ask for your **Atlassian base URL, email, API token**, Jira project key and Confluence
+   space (get a token at
+   [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)).
+4. **Validate** the credentials against the Jira API.
+5. Write the token to a private `~/.config/opencode/paul.env` (chmod 600, git-ignored) and
+   merge the `mcp-atlassian` server + PAUL plugin into `opencode.json` **non-destructively**
+   (your existing config is backed up first; the token is stored as `{env:...}`, never inline).
+6. Append the PAUL behavior block to your `AGENTS.md` and run the test harness.
+
+Then:
+
+```bash
+source ~/.config/opencode/paul.env                       # load secrets (new shells do this automatically)
+./process_meetings.sh examples/sample-transcript.json    # try the meeting pipeline
+```
+
+Re-running `setup.sh` is safe (idempotent). Prefer no prompts? Preset the answers:
+
+```bash
+NONINTERACTIVE=1 JIRA_URL=https://you.atlassian.net JIRA_EMAIL=you@example.com \
+ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN ./setup.sh
+```
+
 ## What you get — nine tools
 
 | Tool | Purpose |
@@ -22,10 +60,10 @@ PAUL gives it real verbs backed by an atomic per-project JSON store at
 | `paul_export_page` | Render memory as a Confluence storage-format body (human summary + hidden lossless JSON block). |
 | `paul_import_page` | Merge an AGENTSMEMORY page back into local memory (newer `updatedAt` wins). |
 
-## Install
+## Manual install (advanced)
 
-There are two ways to install. The **plugin** path is the easiest for others; the
-**custom-tool** path needs no npm.
+The quick start above is the recommended path. If you'd rather wire it up yourself, there
+are two ways. The **plugin** path is easiest to share; the **custom-tool** path needs no npm.
 
 ### Option A — as a plugin (recommended)
 
