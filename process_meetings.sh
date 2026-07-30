@@ -138,13 +138,12 @@ PHASE 2 — ACTION ITEMS -> JIRA (enriched + deduped against PAUL):
   create a duplicate — reuse the existing Jira key and update it (status + the three
   attributes if they changed) via jira update_issue.
 - Only create a NEW Jira task in project "$JIRA_PROJECT" for genuinely new action items.
-  When creating (jira create_issue) put the attributes into REAL Jira fields via
-  additional_fields, and describe them in the description too:
-    * Priority   -> additional_fields: {"priority": {"name": "<Priority>"}}
-    * Time       -> additional_fields: {"timetracking": {"originalEstimate": "<Time>"}}
-    * Complexity -> additional_fields: {"labels": ["complexity-<low|medium|high>"]}
-      (Jira has no native complexity field; a label keeps it portable and filterable.)
-  Also prepend a line to the description: "Complexity: <C> | Priority: <P> | Estimate: <T>".
+  When creating (jira create_issue) set ONLY the summary and the description.
+  DO NOT set any other Jira fields — no priority, no timetracking/estimate, no labels,
+  no duedate, no additional_fields at all. DO NOT assign the ticket to anyone
+  (do not call jira assign_issue). This avoids project-specific field/scheme errors.
+  Put the estimates into the description text instead: prepend the line
+  "Complexity: <C> | Priority: <P> | Estimate: <T>" and name any owner in the body.
 - Collect for every created or matched ticket: Jira key, title, status, Complexity,
   Priority, Time.
 
