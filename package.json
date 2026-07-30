@@ -1,0 +1,47 @@
+{
+  "name": "opencode-paul",
+  "version": "0.1.0",
+  "description": "PAUL — structured, per-project agent memory for OpenCode. Roadmap/Kanban state the agent can list, order, and keep in sync with Jira & Confluence.",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "agent-memory",
+    "roadmap",
+    "kanban",
+    "jira",
+    "confluence",
+    "atlassian"
+  ],
+  "license": "MIT",
+  "author": "Karl-Augustin Jahnel",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KarlAugustinJahnel/opencode-paul.git"
+  },
+  "homepage": "https://github.com/KarlAugustinJahnel/opencode-paul#readme",
+  "bugs": {
+    "url": "https://github.com/KarlAugustinJahnel/opencode-paul/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tool": "./tool/paul.ts"
+  },
+  "files": [
+    "src/",
+    "tool/",
+    "examples/",
+    "AGENTS.snippet.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types scripts/verify.mjs"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

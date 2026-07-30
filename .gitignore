@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+.cache/
+
+# Build / test artifacts
+*.tmp-*
+scripts/.tmp/
+/tmp-verify/
+
+# PAUL runtime store (should be committed per-project by USERS, but never here)
+.paul/
+
+# Editor / OS
+.DS_Store
+*.log
+.idea/
+.vscode/
