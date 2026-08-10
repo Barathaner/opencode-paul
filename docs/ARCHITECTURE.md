@@ -160,8 +160,8 @@ sequenceDiagram
 
     Note over Agent,PAUL: PHASE 2 — action items -> Jira (per item)
     Agent->>PAUL: paul_list(type="doc") [once; background candidates]
-    loop for each action item
-        Agent->>Agent: build TicketSpec (context, background<=3, goal,\napproach, acceptanceCriteria, ...)
+    loop Each action item
+        Agent->>Agent: build TicketSpec (context, background<=3, goal,<br/>approach, acceptanceCriteria, ...)
         Agent->>PAUL: paul_ticket_body(spec)
         PAUL-->>Agent: {description, missing, spec}
         alt equivalent ticket already in paul_list
