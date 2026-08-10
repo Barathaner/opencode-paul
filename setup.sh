@@ -172,7 +172,7 @@ if [ -f "$SECRETS" ]; then
            ATLASSIAN_API_TOKEN="${!TOKEN_VAR:-${ATLASSIAN_API_TOKEN:-}}"
            for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
                     PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
-                    PAUL_JIRA_BOARD_SUBFILTERS \
+                    PAUL_JIRA_BOARD_SUBFILTERS PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
                     PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
                     PAUL_PROTECTED_TERMS; do
              printf 'STORED_%s=%q\n' "$v" "${!v-}"
@@ -385,33 +385,37 @@ fetch_boards() {
   printf '%s' "$acc"
 }
 
-# Print "1) VXF Kanban  (kanban, id 12)" per board, marking the stored selection.
-list_boards() {
-  jq -r --arg sel ",${JIRA_BOARDS}," '
+# --- generic picker ----------------------------------------------------------
+# Boards and Confluence roots are the same interaction: a list of {id,name,type},
+# pick some by line number or id. One implementation, two callers.
+
+# list_items '<json>' '<selected ids>' -> "     1) Name  (type, id 12)  [current]"
+list_items() {
+  jq -r --arg sel ",${2}," '
     to_entries[] | (.value.id | tostring) as $id
     | "     \(.key + 1)) \(.value.name)  (\(.value.type), id \($id))"
       + (if ($sel | contains("," + $id + ",")) then "  [current]" else "" end)
-  ' <<<"$BOARDS_JSON"
+  ' <<<"$1"
 }
 
-# Map "1,3" / "all" / "none" onto a comma-separated list of board ids; "" if unparseable.
-parse_board_pick() {
-  local pick="$1" n ids="" idx total
-  total=$(jq 'length' <<<"$BOARDS_JSON")
+# parse_pick '<json>' '<answer>' -> comma-separated ids; non-zero if unparseable.
+parse_pick() {
+  local json="$1" pick="$2" n ids="" idx total
+  total=$(jq 'length' <<<"$json")
   case "${pick,,}" in
-    all)          jq -r '[.[].id] | join(",")' <<<"$BOARDS_JSON"; return 0 ;;
+    all)          jq -r '[.[].id] | join(",")' <<<"$json"; return 0 ;;
     none|-|skip)  printf ''; return 0 ;;
   esac
   for n in $(printf '%s' "$pick" | tr ',;' '  '); do
     [[ "$n" =~ ^[0-9]+$ ]] || return 1
     idx=$((n - 1))
     if [ "$idx" -ge 0 ] && [ "$idx" -lt "$total" ]; then
-      ids="${ids:+$ids,}$(jq -r ".[$idx].id" <<<"$BOARDS_JSON")"
-    # The list prints each board's id, and the id is what ends up in paul.env and in
-    # --board, so typing one here is the natural reading. Accept it rather than reject
+      ids="${ids:+$ids,}$(jq -r ".[$idx].id" <<<"$json")"
+    # The list prints each id, and the id is what ends up in paul.env and in --board
+    # / --root, so typing one here is the natural reading. Accept it rather than reject
     # it three times and abort. The line number wins when a value could be both; the
     # confirmation line below prints names AND ids, so either reading is visible.
-    elif jq -e --arg i "$n" 'any(.[]; (.id | tostring) == $i)' <<<"$BOARDS_JSON" >/dev/null 2>&1; then
+    elif jq -e --arg i "$n" 'any(.[]; (.id | tostring) == $i)' <<<"$json" >/dev/null 2>&1; then
       ids="${ids:+$ids,}$n"
     else
       return 1
@@ -420,6 +424,36 @@ parse_board_pick() {
   [ -n "$ids" ] || return 1
   printf '%s' "$ids"
 }
+
+# Numbers of the currently-selected entries, for the prompt default ("1,3").
+pick_default() {
+  jq -r --arg sel ",${2}," '
+    [ to_entries[] | (.value.id | tostring) as $id
+      | select($sel | contains("," + $id + ",")) | .key + 1 ] | join(",")
+  ' <<<"$1"
+}
+
+# ask_pick '<json>' '<preselected ids>' '<question>' -> chosen ids on stdout.
+# Three tries, then dies — same shape as ask_key.
+ask_pick() {
+  local json="$1" cur="$2" question="$3" def reply picked tries=0
+  def="$(pick_default "$json" "$cur")"
+  [ -n "$def" ] || def="all"
+  while :; do
+    drain_stdin
+    printf "   %s ${DIM}(line numbers e.g. 1,3 — or the ids — \"all\" / \"none\") [%s]${RST}: " \
+      "$question" "$def" >&2
+    read -r reply
+    if picked=$(parse_pick "$json" "${reply:-$def}"); then printf '%s' "$picked"; return 0; fi
+    warn "'$reply' is not a line number or id from the list above."
+    tries=$((tries + 1))
+    [ "$tries" -ge 3 ] && die "Too many invalid selections."
+  done
+}
+
+# Keep the old names as thin wrappers: the board block below reads better with them.
+list_boards()      { list_items "$BOARDS_JSON" "$JIRA_BOARDS"; }
+parse_board_pick() { parse_pick "$BOARDS_JSON" "$1"; }
 
 BOARDS_JSON=""
 if [ "$CODE" = "200" ] && [ "${PAUL_SKIP_CHECKS:-0}" != "1" ]; then
@@ -454,25 +488,7 @@ else
     echo
     echo "   ${BOLD}$JIRA_PROJECT has $BOARD_COUNT boards.${RST} PAUL ranks and indexes the ones you pick here."
     list_boards
-    DEF_PICK="all"
-    # A stored selection comes back as the default, expressed in this run's numbering.
-    if [ -n "$JIRA_BOARDS" ]; then
-      DEF_PICK=$(jq -r --arg sel ",${JIRA_BOARDS}," '
-        [ to_entries[] | (.value.id | tostring) as $id
-          | select($sel | contains("," + $id + ",")) | .key + 1 ] | join(",")
-      ' <<<"$BOARDS_JSON")
-      [ -n "$DEF_PICK" ] || DEF_PICK="all"
-    fi
-    tries=0
-    while :; do
-      drain_stdin
-      printf "   Which board(s) should PAUL use? ${DIM}(line numbers e.g. 1,3 — or the ids — \"all\" / \"none\") [%s]${RST}: " "$DEF_PICK"
-      read -r reply
-      if PICKED=$(parse_board_pick "${reply:-$DEF_PICK}"); then JIRA_BOARDS="$PICKED"; break; fi
-      warn "'$reply' is not a line number or board id from the list above."
-      tries=$((tries + 1))
-      [ "$tries" -ge 3 ] && die "Too many invalid board selections."
-    done
+    JIRA_BOARDS="$(ask_pick "$BOARDS_JSON" "$JIRA_BOARDS" "Which board(s) should PAUL use?")"
   fi
 fi
 
@@ -503,6 +519,72 @@ if [ -n "$JIRA_BOARDS" ] && [ -n "$BOARDS_JSON" ]; then
     fi
   done
   ok "PAUL will use board(s) ${BOLD}${JIRA_BOARD_NAMES}${RST} ${DIM}(ids $JIRA_BOARDS)${RST}"
+fi
+
+# --- 4c. which documentation tree(s) of the space? ---------------------------
+# The same problem the boards solve, on the Confluence side. A space is usually far
+# larger than the documentation that matters, and the doc index pays per page: the
+# tree walk is cheap, but reading and summarising every page is not.
+#
+# Scoping to a root also makes the completeness claim honest. "I read the whole space"
+# is unverifiable on a big space; "I read this tree, all of it" is something PAUL can
+# actually check and report.
+CONFLUENCE_ROOTS="${CONFLUENCE_ROOTS:-${STORED_PAUL_CONFLUENCE_ROOTS:-}}"
+CONFLUENCE_ROOT_TITLES=""
+
+# Top-level pages of the space as [{id,name,type}] — same shape the picker expects.
+fetch_roots() {
+  local key="$1" start=0 acc="[]" code page size
+  while :; do
+    code=$(api_code "$CONFLUENCE_URL/rest/api/space/$key/content/page?depth=root&limit=50&start=$start" "$RESP")
+    [ "$code" = "200" ] || return 1
+    page=$(jq -c '[.results[]? | {id: .id, name: .title, type: "page"}]' "$RESP" 2>/dev/null) || return 1
+    acc=$(jq -c -n --argjson a "$acc" --argjson b "$page" '$a + $b') || return 1
+    size=$(jq -r '.results | length' "$RESP" 2>/dev/null)
+    [ "${size:-0}" -lt 50 ] && break
+    start=$((start + 50))
+    [ "$start" -ge 500 ] && break        # runaway guard
+  done
+  printf '%s' "$acc"
+}
+
+ROOTS_JSON=""
+if [ "$CODE" = "200" ] && [ "${PAUL_SKIP_CHECKS:-0}" != "1" ]; then
+  ROOTS_JSON="$(fetch_roots "$CONFLUENCE_SPACE")" || ROOTS_JSON=""
+fi
+
+if [ -z "$ROOTS_JSON" ] || [ "$ROOTS_JSON" = "[]" ]; then
+  [ "${PAUL_SKIP_CHECKS:-0}" = "1" ] || warn "no top-level page readable in $CONFLUENCE_SPACE — PAUL will index the whole space"
+  CONFLUENCE_ROOTS=""
+else
+  ROOT_COUNT=$(jq 'length' <<<"$ROOTS_JSON")
+  if [ "$NONINTERACTIVE" = "1" ]; then
+    KEEP=""
+    for id in $(printf '%s' "$CONFLUENCE_ROOTS" | tr ',' ' '); do
+      jq -e --arg i "$id" 'any(.[]; (.id|tostring) == $i)' <<<"$ROOTS_JSON" >/dev/null 2>&1 \
+        && KEEP="${KEEP:+$KEEP,}$id" \
+        || warn "page id $id is not a top-level page of $CONFLUENCE_SPACE — dropped"
+    done
+    CONFLUENCE_ROOTS="$KEEP"
+    if [ -z "$CONFLUENCE_ROOTS" ] && [ "$ROOT_COUNT" -gt 1 ]; then
+      warn "$CONFLUENCE_SPACE has $ROOT_COUNT top-level pages and CONFLUENCE_ROOTS is unset — indexing the whole space."
+      list_items "$ROOTS_JSON" ""
+      warn "set CONFLUENCE_ROOTS=<id[,id]> and re-run to scope the doc index to one tree."
+    fi
+  else
+    echo
+    echo "   ${BOLD}$CONFLUENCE_SPACE has $ROOT_COUNT top-level page(s).${RST} PAUL indexes the trees you pick,"
+    echo "   ${DIM}all the way down to the leaves. Pick \"none\" to index the whole space instead.${RST}"
+    list_items "$ROOTS_JSON" "$CONFLUENCE_ROOTS"
+    CONFLUENCE_ROOTS="$(ask_pick "$ROOTS_JSON" "$CONFLUENCE_ROOTS" "Which documentation tree(s) should PAUL index?")"
+  fi
+fi
+
+if [ -n "$CONFLUENCE_ROOTS" ] && [ -n "$ROOTS_JSON" ]; then
+  CONFLUENCE_ROOT_TITLES=$(jq -r --arg sel ",${CONFLUENCE_ROOTS}," \
+    '[ .[] | (.id | tostring) as $id | select($sel | contains("," + $id + ",")) | .name ]
+     | join(",")' <<<"$ROOTS_JSON")
+  ok "PAUL will index tree(s) ${BOLD}${CONFLUENCE_ROOT_TITLES}${RST} ${DIM}(ids $CONFLUENCE_ROOTS)${RST}"
 fi
 
 rm -f "$RESP"; trap - EXIT
@@ -569,6 +651,8 @@ export PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS"
 # Each board's sub-filter, base64, one slot per filter id above. A Kanban board's saved
 # filter is usually the whole project; this second query is what the board actually shows.
 export PAUL_JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS"
+export PAUL_CONFLUENCE_ROOTS="$CONFLUENCE_ROOTS"
+export PAUL_CONFLUENCE_ROOT_TITLES="$CONFLUENCE_ROOT_TITLES"
 
 # --- Behaviour switches -------------------------------------------------------
 # EDIT THESE HERE. Every PAUL script reads this file, and re-running setup.sh
@@ -607,6 +691,8 @@ export PAUL_JIRA_BOARDS="$JIRA_BOARDS"
 export PAUL_JIRA_BOARD_NAMES="$JIRA_BOARD_NAMES"
 export PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS"
 export PAUL_JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS"
+export PAUL_CONFLUENCE_ROOTS="$CONFLUENCE_ROOTS"
+export PAUL_CONFLUENCE_ROOT_TITLES="$CONFLUENCE_ROOT_TITLES"
 export PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS
 
 # 5b. merge opencode.json non-destructively (backup first).
@@ -663,14 +749,19 @@ AGENTS_JQL="$(PRINT_JQL=1 PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS" \
 [ -n "$AGENTS_JQL" ] || AGENTS_JQL="project = \"$JIRA_PROJECT\" ORDER BY created DESC"
 
 render_agents_block() {
+  local cfroots="${CONFLUENCE_ROOT_TITLES:-$CONFLUENCE_ROOTS}"
+  [ -n "$cfroots" ] || cfroots="(none)"
   awk -v space="$CONFLUENCE_SPACE" -v project="$JIRA_PROJECT" -v jql="${AGENTS_JQL//&/\\&}" \
-      -v marker="$MARKER" -v mcp="$MCP_KEY" '
+      -v marker="$MARKER" -v mcp="$MCP_KEY" -v cfroots="${cfroots//&/\\&}" \
+      -v halflife="${PAUL_MEETING_HALFLIFE_DAYS:-30}" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
       gsub(/\{\{JIRA_PROJECT\}\}/, project)
       gsub(/\{\{JIRA_JQL\}\}/, jql)
       gsub(/\{\{PROFILE_MARKER\}\}/, marker)
       gsub(/\{\{MCP_SERVER\}\}/, mcp)
+      gsub(/\{\{CONFLUENCE_ROOTS\}\}/, cfroots)
+      gsub(/\{\{MEETING_HALFLIFE_DAYS\}\}/, halflife)
       print
     }
   ' "$REPO_DIR/AGENTS.snippet.md"

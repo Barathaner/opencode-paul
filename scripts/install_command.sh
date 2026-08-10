@@ -24,6 +24,9 @@ SPACE="${1:-${PAUL_CONFLUENCE_SPACE:-${CONFLUENCE_SPACE:-SOFTWAREEN}}}"
 PROJECT="${2:-${PAUL_JIRA_PROJECT:-${JIRA_PROJECT:-KAN}}}"
 MEM_TITLE="${3:-${PAUL_AGENTSMEMORY_TITLE:-AGENTSMEMORY}}"
 BOARD_FILTERS="${4:-${PAUL_JIRA_BOARD_FILTERS:-}}"
+CONFLUENCE_ROOTS="${PAUL_CONFLUENCE_ROOTS:-}"
+CONFLUENCE_ROOT_TITLES="${PAUL_CONFLUENCE_ROOT_TITLES:-}"
+MEETING_HALFLIFE_DAYS="${PAUL_MEETING_HALFLIFE_DAYS:-30}"
 BOARD_SUBFILTERS="${PAUL_JIRA_BOARD_SUBFILTERS:-}"
 BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}"
 
@@ -52,6 +55,14 @@ if [ "${PRINT_JQL:-0}" = "1" ]; then printf '%s\n' "$JQL"; exit 0; fi
 # awk's gsub() reads & in the replacement as the matched text.
 JQL="${JQL//&/\\&}"
 SCOPE="${SCOPE//&/\\&}"
+
+# The Confluence half of the scope, same shape as scripts/init_from_docs.sh renders.
+CONFLUENCE_SCOPE=""
+[ -n "$CONFLUENCE_ROOTS" ] \
+  && CONFLUENCE_SCOPE=", starting from the tree(s) ${CONFLUENCE_ROOT_TITLES:-$CONFLUENCE_ROOTS}"
+CONFLUENCE_SCOPE="${CONFLUENCE_SCOPE//&/\\&}"
+CONFLUENCE_ROOTS_ESC="${CONFLUENCE_ROOTS//&/\\&}"
+[ -n "$CONFLUENCE_ROOTS_ESC" ] || CONFLUENCE_ROOTS_ESC="(none)"
 
 # A profile installs its own command, so two PAULs give you /paul-init-docs-a and
 # /paul-init-docs-b instead of one overwriting the other. No profile = the old name.
@@ -90,6 +101,8 @@ FRONTMATTER
   # to curl from. "unknown" tells the agent to trust its own enumeration instead.
   awk -v space="$SPACE" -v project="$PROJECT" -v memtitle="$MEM_TITLE" \
       -v jql="$JQL" -v scope="$SCOPE" -v mode="$MODE_LINE" -v expected="unknown" \
+      -v cfscope="$CONFLUENCE_SCOPE" -v cfroots="$CONFLUENCE_ROOTS_ESC" \
+      -v halflife="$MEETING_HALFLIFE_DAYS" \
       -v mcp="$MCP_KEY" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
@@ -98,6 +111,9 @@ FRONTMATTER
       gsub(/\{\{JIRA_JQL\}\}/, jql)
       gsub(/\{\{JIRA_SCOPE\}\}/, scope)
       gsub(/\{\{JIRA_EXPECTED\}\}/, expected)
+      gsub(/\{\{CONFLUENCE_SCOPE\}\}/, cfscope)
+      gsub(/\{\{CONFLUENCE_ROOTS\}\}/, cfroots)
+      gsub(/\{\{MEETING_HALFLIFE_DAYS\}\}/, halflife)
       gsub(/\{\{MCP_SERVER\}\}/, mcp)
       if ($0 ~ /\{\{MODE\}\}/) { print mode; next }
       print

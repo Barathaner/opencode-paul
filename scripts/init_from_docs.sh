@@ -5,10 +5,11 @@
 # Points OpenCode at your Confluence space and Jira project, has it READ everything,
 # summarize it, and write what it learned into PAUL memory:
 #   1. Pull the shared AGENTSMEMORY page so a re-run updates instead of duplicating.
-#   2. Read every page in the space (following documentation trees into their subpages)
-#      and every issue the selected boards show — or every issue in the project when no
-#      board is configured. A board scope that cannot be resolved aborts the run rather
-#      than widening to the whole project; --no-board is the deliberate way to ask for it.
+#   2. Walk the selected documentation tree(s) to their leaves — or the whole space when
+#      no root is configured — and read every issue the selected boards show, or every
+#      issue in the project when no board is configured. A board scope that cannot be
+#      resolved aborts the run rather than widening to the whole project; --no-board and
+#      --no-root are the deliberate ways to ask for everything.
 #   3. Summarize each doc / meeting / ticket and persist it via a single paul_init call,
 #      plus the roadmap cursor: where the project stands right now.
 #   4. Push the updated AGENTSMEMORY page.
@@ -30,9 +31,15 @@
 #   ./scripts/init_from_docs.sh --board 12,21       # only what those boards show
 #   ./scripts/init_from_docs.sh --no-board          # the whole project, ignoring the config
 #   ./scripts/init_from_docs.sh --full-filter       # each board's whole saved filter
+#   ./scripts/init_from_docs.sh --root 12345        # only that documentation tree
+#   ./scripts/init_from_docs.sh --no-root           # the whole space, ignoring the config
 #
-# By default it indexes the boards setup.sh selected (PAUL_JIRA_BOARDS); with none
-# selected, the whole Jira project.
+# By default it indexes the boards setup.sh selected (PAUL_JIRA_BOARDS) and the
+# documentation tree(s) it selected (PAUL_CONFLUENCE_ROOTS); with neither set, the whole
+# Jira project and the whole Confluence space.
+#
+# SCOPE IS WHAT MAKES "COMPLETE" MEAN ANYTHING. On a large space "I read everything" is
+# unverifiable; "I read this tree, all of it" is something the run can actually check.
 #
 # A BOARD'S SAVED FILTER IS NOT WHAT THE BOARD SHOWS. Its configuration carries two
 # queries: the saved filter (on a default Kanban board, `project = X` — every ticket the
@@ -50,6 +57,10 @@
 #   PAUL_JIRA_BOARDS        board ids to index, comma-separated        (whole project)
 #   PAUL_JIRA_BOARD_FILTERS their saved-filter ids, from setup.sh      (resolved if unset)
 #   PAUL_JIRA_BOARD_SUBFILTERS their sub-filters, base64, one slot per filter id
+#   PAUL_CONFLUENCE_ROOTS   top-level page ids to walk, comma-separated (whole space)
+#   PAUL_CONFLUENCE_ROOT_TITLES their titles, for readable logs
+#   PAUL_MEETING_HALFLIFE_DAYS  how fast a meeting note stops being current   (30)
+#                           Standing docs (architecture, ADRs) are never aged out.
 #   PAUL_AGENTSMEMORY_TITLE title of the shared memory page            (AGENTSMEMORY)
 #   PAUL_ROLES              comma-separated role vocabulary            (built-in defaults)
 #
@@ -93,7 +104,7 @@ paul_load_env() {
   if [ -z "$p" ]; then
     for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
              PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
-             PAUL_JIRA_BOARD_SUBFILTERS \
+             PAUL_JIRA_BOARD_SUBFILTERS PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
              PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
              PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
       [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
@@ -125,6 +136,16 @@ JIRA_BOARD_FILTERS="${PAUL_JIRA_BOARD_FILTERS:-}"
 JIRA_BOARD_SUBFILTERS="${PAUL_JIRA_BOARD_SUBFILTERS:-}"
 JIRA_BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}"
 
+# Confluence scope: which documentation tree(s) to walk. Same idea as the boards, and
+# for the same reason — a space is usually far bigger than the docs that matter, and
+# the index pays per page. Empty = the whole space.
+CONFLUENCE_ROOTS="${PAUL_CONFLUENCE_ROOTS:-}"
+CONFLUENCE_ROOT_TITLES="${PAUL_CONFLUENCE_ROOT_TITLES:-}"
+
+# How fast a meeting note stops being current. 30 days puts anything past two months
+# into the shallowest tier. Standing documents are never aged out — see the prompt.
+MEETING_HALFLIFE_DAYS="${PAUL_MEETING_HALFLIFE_DAYS:-30}"
+
 # The JQL builder both renderers share, plus the two preflight counters.
 . "$REPO_DIR/scripts/lib/jira_scope.sh"
 # Which Atlassian MCP server this run may use — and how to switch the others off.
@@ -153,10 +174,15 @@ while [ $# -gt 0 ]; do
                 JIRA_BOARD_NAMES=""; shift 2 ;;
     --no-board) JIRA_BOARDS=""; JIRA_BOARD_FILTERS=""; JIRA_BOARD_SUBFILTERS=""
                 JIRA_BOARD_NAMES=""; shift ;;
+    # Same for the Confluence side: an explicit tree replaces the configured one, and
+    # the titles go with it so the log cannot name a tree that is not being walked.
+    --root|--roots)
+                CONFLUENCE_ROOTS="${2:-}"; CONFLUENCE_ROOT_TITLES=""; shift 2 ;;
+    --no-root)  CONFLUENCE_ROOTS=""; CONFLUENCE_ROOT_TITLES=""; shift ;;
     # Index the board's whole saved filter — for a Kanban board, every ticket the project
     # ever had, not the ~130 the board shows. Deliberate and slow, never the default.
     --full-filter) FULL_FILTER=1; shift ;;
-    -h|--help)  sed -n '2,55p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,68p' "$0"; exit 0 ;;
     *)          echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -275,6 +301,11 @@ fi
 JIRA_SCOPE=""
 [ -n "$JIRA_BOARD_FILTERS" ] && JIRA_SCOPE=", board(s) ${JIRA_BOARD_NAMES:-$JIRA_BOARDS}"
 
+# The Confluence half of the same sentence: which tree(s) the walk starts from.
+CONFLUENCE_SCOPE=""
+[ -n "$CONFLUENCE_ROOTS" ] \
+  && CONFLUENCE_SCOPE=", starting from the tree(s) ${CONFLUENCE_ROOT_TITLES:-$CONFLUENCE_ROOTS}"
+
 if [ "$COUNT_ONLY" -eq 1 ]; then
   CF_COUNT="$(paul_confluence_count "$CONFLUENCE_SPACE")"
   echo "Jira    ${JIRA_PROJECT}${JIRA_SCOPE}: ${JIRA_EXPECTED} issues in scope"
@@ -286,6 +317,9 @@ fi
 # awk's gsub() reads & in the replacement as "the text that matched", so a board
 # named "R&D" would otherwise render as the placeholder it replaced.
 JIRA_SCOPE="${JIRA_SCOPE//&/\\&}"
+CONFLUENCE_SCOPE="${CONFLUENCE_SCOPE//&/\\&}"
+CONFLUENCE_ROOTS_ESC="${CONFLUENCE_ROOTS//&/\\&}"
+[ -n "$CONFLUENCE_ROOTS_ESC" ] || CONFLUENCE_ROOTS_ESC="(none)"
 JIRA_JQL="${JIRA_JQL//&/\\&}"
 
 render_prompt() {
@@ -294,6 +328,9 @@ render_prompt() {
       -v memtitle="$AGENTSMEMORY_TITLE" \
       -v jql="$JIRA_JQL" \
       -v scope="$JIRA_SCOPE" \
+      -v cfscope="$CONFLUENCE_SCOPE" \
+      -v cfroots="$CONFLUENCE_ROOTS_ESC" \
+      -v halflife="$MEETING_HALFLIFE_DAYS" \
       -v expected="$JIRA_EXPECTED" \
       -v mcp="$MCP_KEY" \
       -v mode="$MODE_LINE" '
@@ -302,6 +339,9 @@ render_prompt() {
       gsub(/\{\{JIRA_PROJECT\}\}/, project)
       gsub(/\{\{AGENTSMEMORY_TITLE\}\}/, memtitle)
       gsub(/\{\{JIRA_JQL\}\}/, jql)
+      gsub(/\{\{CONFLUENCE_SCOPE\}\}/, cfscope)
+      gsub(/\{\{CONFLUENCE_ROOTS\}\}/, cfroots)
+      gsub(/\{\{MEETING_HALFLIFE_DAYS\}\}/, halflife)
       gsub(/\{\{JIRA_SCOPE\}\}/, scope)
       gsub(/\{\{JIRA_EXPECTED\}\}/, expected)
       gsub(/\{\{MCP_SERVER\}\}/, mcp)
@@ -345,7 +385,12 @@ if [ -n "$JIRA_BOARD_FILTERS" ]; then
 else
   SCOPE_LINE="boards: none — the WHOLE project"
 fi
-log "Space: $CONFLUENCE_SPACE | Jira project: $JIRA_PROJECT | $SCOPE_LINE | reset: $RESET"
+if [ -n "$CONFLUENCE_ROOTS" ]; then
+  CF_SCOPE_LINE="tree(s) ${CONFLUENCE_ROOT_TITLES:-$CONFLUENCE_ROOTS} (ids $CONFLUENCE_ROOTS)"
+else
+  CF_SCOPE_LINE="the WHOLE space"
+fi
+log "Space: $CONFLUENCE_SPACE — $CF_SCOPE_LINE | Jira project: $JIRA_PROJECT | $SCOPE_LINE | reset: $RESET"
 log "Jira search: $JIRA_JQL"
 # The scope size, before anything reads anything: a wrong scope is visible here in seconds
 # instead of an hour later in a ticket count nobody can explain.

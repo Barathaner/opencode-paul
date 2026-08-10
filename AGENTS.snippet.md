@@ -94,7 +94,13 @@ deciding, and someone already chose what became a ticket.
 3. Gather Confluence: `confluence_get_space_page_tree(space_key = {{CONFLUENCE_SPACE}}, limit
    1000)` — one call returns every page with its `parent_id`, which is the tree. Do not try to
    paginate `confluence_search`; it has no offset parameter. Skip pages whose version matches
-   the stored `meta.version`: they have not changed.
+   the stored `meta.version`: they have not changed. Read bodies with
+   `confluence_get_page(page_id, include_metadata: false, convert_to_markdown: true)` — the tree
+   already gave you title, id and version, and storage HTML costs several times what markdown does.
+   Scope: {{CONFLUENCE_ROOTS}} — index those trees and their descendants; "(none)" means the whole
+   space. Meeting notes older than ~2 months get one-sentence summaries (half-life
+   {{MEETING_HALFLIFE_DAYS}} days); standing docs are NEVER aged out — an untouched decision record
+   is authoritative, not stale.
 4. Gather Jira: `jira_search` (JQL like `{{JIRA_JQL}}`), paging with `page_token` taken from
    the previous result's `next_page_token` — `start_at` is ignored on Jira Cloud and returns
    the same first page forever. Then `jira_get_issue` for detail on the open tickets only.
@@ -132,7 +138,9 @@ Atlassian servers are configured, each is a different site — use that one, nev
 PULL FIRST — at the START of any task touching Confluence or Jira:
 1. `paul_remote` (no args) to get the known pageId. If unknown, `confluence_search`
    with cql `title = "AGENTSMEMORY"` to find it.
-2. If the page exists: `confluence_get_page(page_id, ...)` in STORAGE format, then
+2. If the page exists: `confluence_get_page(page_id, convert_to_markdown: false)` — storage
+   format, the only call that should ask for it, because the machine state is a CDATA block
+   markdown conversion would mangle. Then
    `paul_import_page(pageBody=<body>, pageId=<id>, spaceKey=<KEY>)`. This merges
    remote → local (newer updatedAt wins per entry and for the cursor).
 3. If the page does NOT exist yet, skip the pull.

@@ -36,18 +36,22 @@ cd opencode-paul
    carries several — one per team, one for bugs — and they are not interchangeable: each shows its
    own subset and can rank with its own field. Answer with the line numbers, the board ids, `all`
    or `none`. The pick scopes both the board reorder and what gets indexed.
-6. Write everything to a private `~/.config/opencode/paul.env` (chmod 600, git-ignored) and
+6. List the space's **top-level pages** and ask which documentation trees to index. A space is
+   usually far larger than the docs that matter, and the index pays per page — so this is the knob
+   that decides whether a first index costs minutes or hours. Same answer format as the boards.
+   `none` indexes the whole space.
+7. Write everything to a private `~/.config/opencode/paul.env` (chmod 600, git-ignored) and
    merge the `mcp-atlassian` server + PAUL plugin into `opencode.json` **non-destructively**
    (your existing config is backed up first; the token is stored as `{env:...}`, never inline).
-7. Install the PAUL behavior block into your `AGENTS.md` — **refreshed on every run**, between its
+8. Install the PAUL behavior block into your `AGENTS.md` — **refreshed on every run**, between its
    markers, so the agent is told the same space, project and search the scripts use; anything you
    wrote outside the markers is untouched. Then install the `/paul-init-docs` command, install the
    checkout's test dependencies, run the test harness, and confirm `mcp-atlassian` starts (which
    also warms the `uvx` cache, so your first OpenCode run does not stall).
-8. Ask **what PAUL may change** on a project other people already run — may it rewrite an existing
+9. Ask **what PAUL may change** on a project other people already run — may it rewrite an existing
    Jira ticket's description, may it re-rank your board, and which product names the name-scrub must
    never touch. Both permissions default to *no*.
-9. Offer to **index your existing Confluence space and Jira project into PAUL memory** — read-only
+10. Offer to **index your existing Confluence space and Jira project into PAUL memory** — read-only
    apart from PAUL's own mirror page. Say yes and PAUL already knows your project when you open
    OpenCode.
 
@@ -264,13 +268,30 @@ so two Atlassian sites can sit side by side in one `opencode.json`.
 
 A team that already has a Confluence space and a Jira board should not have to wait for the next
 meeting before PAUL knows anything. This entrypoint has the agent **read** what already exists —
-every page in the space, following documentation trees into their subpages, plus every issue in the
-project — summarize it, and write what it learned into PAUL memory:
+the documentation trees you picked, down to their leaves, plus the issues your boards show —
+summarize it, and write what it learned into PAUL memory:
 
-If you picked boards during setup, "every issue in the project" narrows to what those boards show —
-their saved filters scope the search (`project = "VXF" AND (filter = 101 OR filter = 103)`), so it
-follows the board rather than a JQL string frozen at setup time. `--board 12,21` overrides the
-selection for one run, `--no-board` ignores it.
+**Both halves are scoped, because a whole space is usually far more than the documentation that
+matters and the index pays per page.** Boards narrow the Jira side through their saved filters
+(`project = "VXF" AND (filter = 101 OR filter = 103)`), so it follows the board rather than a JQL
+string frozen at setup time. Roots narrow the Confluence side: setup lists the space's top-level
+pages, you pick the trees, and the walk stays inside them. `--board` / `--root` override a
+selection for one run; `--no-board` / `--no-root` ignore it and take everything.
+
+Scoping is also what makes the completeness claim mean anything. "I read the whole space" cannot be
+verified on a large space; "I read these trees, all of them" can — so `complete: true` stays both
+achievable and honest.
+
+**How deeply each page is read depends on what it is.** Meeting notes are events and their value
+decays: with a 30-day half-life (`PAUL_MEETING_HALFLIFE_DAYS`), anything past two months gets a
+one-sentence summary rather than a full one — still indexed, just shallower, and the five most
+recent always keep more detail so a dormant space still yields a cursor. Standing documents —
+architecture, ADRs, conventions, runbooks — are **never** aged out. A decision nobody has had to
+revise in three years is the most load-bearing page in the space; "long untouched" is authority
+there, not staleness. What lowers a doc's weight is being superseded, not being old.
+
+On a large space the run fans out: one subagent per documentation tree, each returning structured
+summaries rather than page bodies, so the bulk of the text never enters the main context.
 
 ```bash
 ./scripts/init_from_docs.sh              # incremental — safe to repeat
@@ -278,6 +299,8 @@ selection for one run, `--no-board` ignores it.
 ./scripts/init_from_docs.sh --dry-run    # print the prompt, call nothing
 ./scripts/init_from_docs.sh --board 12   # index only what board 12 shows
 ./scripts/init_from_docs.sh --no-board   # index the whole project on purpose
+./scripts/init_from_docs.sh --root 1001  # index only that documentation tree
+./scripts/init_from_docs.sh --no-root    # index the whole space on purpose
 ```
 
 **A board scope that cannot be resolved aborts the run** (exit 3) instead of falling back to the
@@ -366,6 +389,9 @@ All paths and keys are environment-overridable (defaults in parentheses):
 | `PAUL_AUTOMATION_DIR` | `~/opencode_automations` | base for logs + project |
 | `PAUL_PROJECT_DIR` | `$PAUL_AUTOMATION_DIR/paul-project` | holds `.paul/memory.json` |
 | `PAUL_CONFLUENCE_SPACE` | `SOFTWAREEN` | Confluence space key |
+| `PAUL_CONFLUENCE_ROOTS` | *(empty)* | top-level page ids whose trees get indexed; empty = the whole space |
+| `PAUL_CONFLUENCE_ROOT_TITLES` | *(empty)* | their titles, for readable logs — written by `setup.sh` |
+| `PAUL_MEETING_HALFLIFE_DAYS` | `30` | how fast a meeting note stops being current; standing docs never age out |
 | `PAUL_JIRA_PROJECT` | `KAN` | Jira project key |
 | `PAUL_JIRA_BOARDS` | *(empty)* | comma-separated board ids PAUL ranks and indexes; empty = the whole project |
 | `PAUL_JIRA_BOARD_NAMES` | *(empty)* | their names, for readable output — written by `setup.sh` |

@@ -457,7 +457,10 @@ ok(/ask_secret\(\) \{ # ask_secret VAR "prompt" \[stored\]/.test(setup) && /Ente
 ok(!/if \[ -n "\$cur" \]; then eval "\$var=\\\$cur"; return; fi/.test(setup)
    && /\[ -n "\$cur" \] && (def|stored)="\$cur"/.test(setup),
   "setup.sh: a value already in the environment is a prompt DEFAULT, not a skipped question")
-const askBodies = [...setup.matchAll(/^(ask\w*)\(\) \{[\s\S]*?^\}/gm)].map((m) => m[0])
+// Only the value helpers take a preset; ask_pick has no NONINTERACTIVE branch by design
+// (an unattended run resolves its selection from the stored ids, never from a prompt).
+const askBodies = [...setup.matchAll(/^(ask\w*)\(\) \{[\s\S]*?^\}/gm)]
+  .map((m) => m[0]).filter((b) => b.includes("NONINTERACTIVE"))
 ok(askBodies.length === 4 && askBodies.every((b) => !/\$cur[\s\S]*?return/.test(b.split("NONINTERACTIVE")[0])),
   "setup.sh: no prompt helper returns on $cur before the NONINTERACTIVE check")
 
@@ -503,6 +506,42 @@ ok(/UNRESOLVED_BOARDS/.test(initSh) && /are NOT included in this index/.test(ini
   "init_from_docs.sh names the boards it could not resolve instead of dropping them silently")
 ok(/log "Jira search: \$JIRA_JQL"/.test(initSh),
   "init_from_docs.sh logs the JQL it actually runs, so the log cannot overstate the scope")
+
+// Confluence scope: a space is usually far larger than the docs that matter, and the
+// index pays per page. Scoping is also what makes "complete" verifiable at all.
+ok(/PAUL_CONFLUENCE_ROOTS/.test(setup) && /export PAUL_CONFLUENCE_ROOTS=/.test(setup)
+   && setup.includes("STORED_PAUL_CONFLUENCE_ROOTS") && /fetch_roots\(\)/.test(setup),
+  "setup.sh asks which documentation tree(s) to index and stores the answer")
+ok(["PAUL_CONFLUENCE_ROOTS", "PAUL_CONFLUENCE_ROOT_TITLES"].every((v) =>
+  SHIPPED_SCRIPTS.every((p) => readFileSync(REPO + p, "utf8").includes(v))),
+  "the Confluence root keys are in every paul.env keep-list")
+ok(/--root\|--roots\)/.test(initSh) && /--no-root\)/.test(initSh)
+   && /CF_SCOPE_LINE=/.test(initSh),
+  "init_from_docs.sh takes --root / --no-root and logs the tree scope it actually walks")
+
+// One picker, two callers — boards and roots are the same interaction.
+ok(/^list_items\(\)/m.test(setup) && /^parse_pick\(\)/m.test(setup) && /^ask_pick\(\)/m.test(setup),
+  "setup.sh shares one picker between the board and the documentation-tree question")
+
+// Reading depth: events decay, standing documents do not. Getting this backwards would
+// discard the architecture and keep the standups.
+ok(/0\.5 \^ \(age_in_days \/ \{\{MEETING_HALFLIFE_DAYS\}\}\)/.test(prompt)
+   && /For DOC pages, do NOT weight by age/.test(prompt),
+  "init_from_docs prompt ages out MEETING pages only, never standing documents")
+ok(/five most recent meetings in scope/.test(prompt),
+  "init_from_docs prompt keeps a floor of recent meetings so a dormant space still has a cursor")
+ok(renderers.every((s) => /MEETING_HALFLIFE_DAYS\\\}\\\}/.test(s) && /CONFLUENCE_ROOTS\\\}\\\}/.test(s)),
+  "both prompt renderers substitute the tree scope and the meeting half-life")
+
+// Two opposite fetch settings, on purpose. Swapping them is the failure mode.
+ok(/include_metadata: false, convert_to_markdown: true/.test(prompt),
+  "init_from_docs prompt fetches doc pages without the metadata it already has")
+const storageCalls = [...prompt.matchAll(/convert_to_markdown: false/g)]
+ok(storageCalls.length === 1 && /CDATA/.test(prompt),
+  "exactly one call asks for storage format — the AGENTSMEMORY page, whose CDATA must survive")
+ok(/SPLIT THE WORK ACROSS SUBAGENTS/.test(prompt) && /EXACTLY ONE branch/.test(prompt)
+   && /read-only contract restated in full/.test(prompt),
+  "init_from_docs prompt fans out per tree, assigns each page once, and rebinds the contract")
 
 // A board's saved filter is the WHOLE project on a default Kanban board; the sub-filter is
 // what the board actually shows. Reading only the filter turns a 130-ticket board into a
@@ -571,7 +610,7 @@ ok(exportsAt > 0 && exportsAt < setup.indexOf("init_from_docs.sh\" \\"),
   "setup.sh exports the answers it collected before running the bootstrap index")
 
 // The board list prints ids next to the line numbers; both have to be accepted.
-ok(/\(\.id \| tostring\) == \$i/.test(setup.slice(setup.indexOf("parse_board_pick"))),
+ok(/\(\.id \| tostring\) == \$i/.test(setup.slice(setup.indexOf("parse_pick()"))),
   "setup.sh accepts a board id as well as a line number at the board prompt")
 
 // PAUL_PROFILE: everything setup installs is a singleton under one config dir, so a

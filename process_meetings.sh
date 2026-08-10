@@ -69,7 +69,7 @@ paul_load_env() {
   if [ -z "$p" ]; then
     for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
              PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
-             PAUL_JIRA_BOARD_SUBFILTERS \
+             PAUL_JIRA_BOARD_SUBFILTERS PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
              PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
              PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
       [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
@@ -219,7 +219,9 @@ space or project below appears not to exist, stop and say so; never retry on ano
 PHASE 0 — LOAD MEMORY (pull first, before doing anything else):
 - Call paul_remote (no args) to get the known AGENTSMEMORY pageId. If none is
   stored, use confluence_search with cql: title = "$AGENTSMEMORY_TITLE" AND space = "$CONFLUENCE_SPACE".
-- If the AGENTSMEMORY page exists: confluence_get_page in STORAGE format, then
+- If the AGENTSMEMORY page exists: confluence_get_page(page_id=<id>, convert_to_markdown: false)
+  — storage format, deliberately: the machine state is a CDATA block that markdown conversion
+  would mangle. Then
   paul_import_page(pageBody=<body>, pageId=<id>, spaceKey="$CONFLUENCE_SPACE") to merge remote -> local.
 - Call paul_list and paul_cursor (no args) to load existing meetings, tickets, and
   the current roadmap phase. You will use this to AVOID creating duplicate Jira

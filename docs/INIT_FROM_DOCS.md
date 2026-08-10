@@ -224,6 +224,9 @@ The script reads the same environment as `process_meetings.sh`, all of it writte
 | `PAUL_CONFLUENCE_SPACE` | `SOFTWAREEN` | space to read |
 | `PAUL_JIRA_PROJECT` | `KAN` | project to read |
 | `PAUL_JIRA_BOARDS` | *(empty)* | board ids to read instead of the whole project (asked at setup) |
+| `PAUL_CONFLUENCE_ROOTS` | *(empty)* | top-level page ids whose trees get read instead of the whole space (asked at setup) |
+| `PAUL_CONFLUENCE_ROOT_TITLES` | *(empty)* | their titles, for readable logs |
+| `PAUL_MEETING_HALFLIFE_DAYS` | `30` | meeting-note recency half-life; standing docs are never aged out |
 | `PAUL_JIRA_BOARD_FILTERS` | *(empty)* | their saved-filter ids — the coarse half of the scope |
 | `PAUL_JIRA_BOARD_SUBFILTERS` | *(empty)* | their sub-filters, base64, one slot per filter id — what makes the scope match the board |
 | `PAUL_AGENTSMEMORY_TITLE` | `AGENTSMEMORY` | title of the mirror page |

@@ -40,7 +40,9 @@ AGENTSMEMORY page. Everything the project already has stays exactly as it is.
 PHASE 1 — LOAD EXISTING MEMORY (pull first, so a re-run updates instead of duplicating):
 - Call paul_remote (no args) to get the known AGENTSMEMORY pageId. If none is stored, use
   confluence_search with cql: title = "{{AGENTSMEMORY_TITLE}}" AND space = "{{CONFLUENCE_SPACE}}".
-- If the page exists: confluence_get_page in STORAGE format, then
+- If the page exists: confluence_get_page(page_id=<id>, convert_to_markdown: false) — storage
+  format, deliberately, and the ONLY call in this run that asks for it. PAUL's machine state is
+  embedded in that page as a CDATA block and markdown conversion would mangle it. Then
   paul_import_page(pageBody=<body>, pageId=<id>, spaceKey="{{CONFLUENCE_SPACE}}").
 - If it does not exist yet, skip the pull.
 - Call paul_list and paul_cursor (no args). Keep the result: it tells you which pages and issues are
@@ -81,13 +83,65 @@ Confluence — the space "{{CONFLUENCE_SPACE}}":
 - A SEARCH RESULT IS NOT THE PAGE. confluence_search returns an excerpt — a truncated,
   markup-stripped fragment. Summarizing from excerpts produces summaries that look specific and
   are quietly wrong. Every page you index gets its summary from a confluence_get_page body.
-- Read the remaining pages with confluence_get_page. Classify each one:
+- Read the remaining pages with
+  confluence_get_page(page_id=<id>, include_metadata: false, convert_to_markdown: true).
+  include_metadata: false matters — with it on, every page re-sends id, title, url, version, space,
+  author and an attachments list that nothing here reads, and you already have all of that from the
+  page tree and from PHASE 1. convert_to_markdown: true matters because raw storage HTML costs
+  several times the tokens of the same page as markdown.
+  Classify each one:
   * MEETING — notes from a dated event: meeting notes, standup, retro, planning, review.
   * DOC — standing knowledge: architecture or feature spec, decision record, reference, runbook,
     onboarding, process/convention page.
   * SKIP — templates, empty stubs, personal scratch pages, archived duplicates. Say in your final
     report which pages you skipped and why.
 - Ignore the AGENTSMEMORY page itself as a source; it is memory, not documentation.
+
+SPLIT THE WORK ACROSS SUBAGENTS, ONE PER TREE:
+- Once you have the in-scope page list, do not read it all yourself. Delegate each top-level branch
+  to its own subagent and work through them in parallel where the harness allows it. Page bodies
+  are the bulk of this run; keeping them out of your own context is what makes a large space
+  affordable.
+- Assign every page to EXACTLY ONE branch, by its primary parent in the tree. A page reachable from
+  two branches gets summarized twice otherwise, and the two summaries will not agree.
+- Each subagent inherits nothing from this prompt, so give it: its branch's page list, the depth
+  rules below, the classification rules, and PHASE 0's read-only contract restated in full. It is
+  bound by that contract exactly as you are.
+- Require it to return STRUCTURED data, not prose: the doc/meeting entries, one rollup summary for
+  the branch, its skipped[] with reasons, and its counts. You merge those, reconcile coverage and
+  make the single paul_init call in PHASE 4. Raw page bodies never come back to you.
+- Keep a lid on concurrency — every subagent hits the same Atlassian rate limit, and a run that
+  gets throttled halfway is worse than one that took longer.
+- If the harness has no subagents available, do the same work inline, branch by branch, and say so
+  in your final report.
+
+SCOPE — WHICH TREES ARE IN{{CONFLUENCE_SCOPE}}:
+- Root page ids for this run: {{CONFLUENCE_ROOTS}}. If that reads "(none)", the whole space is in
+  scope and you skip this step.
+- Otherwise keep only the pages that sit under one of those roots — the root itself plus every
+  descendant, followed through parent_id in the tree you already fetched. No extra calls: the tree
+  has the whole structure. A page outside those trees is out of scope: it is neither indexed nor
+  listed in skipped[], because it was never in the run.
+- confluenceExpected is then the number of pages IN SCOPE, not total_pages. Report total_pages
+  separately in your final report so the difference is visible.
+- This is what makes "complete" mean something. "I read the whole space" cannot be verified on a
+  large space; "I read these trees, all of them" can.
+
+HOW DEEPLY TO READ — RECENCY APPLIES TO EVENTS, NOT TO STANDING DOCUMENTS:
+- For MEETING pages, weight by age: `0.5 ^ (age_in_days / {{MEETING_HALFLIFE_DAYS}})`. Use the date
+  in the page title where it has one — that is the event date; `updated` moves for typo and label
+  edits and is the weaker signal.
+  * weight >= 0.5 (roughly the last month): full summary — decisions taken, action items, status.
+  * weight >= 0.25 (one to two months): two sentences.
+  * below that (older than about two months): ONE sentence. Still a real summary, never a stub —
+    every in-scope page gets indexed, only the depth changes.
+  * Exception so a dormant space still yields a cursor: the five most recent meetings in scope
+    always get at least the two-sentence treatment, however old they are.
+- For DOC pages, do NOT weight by age. A decision nobody has had to revise in three years is the
+  most load-bearing document in the space — "long untouched" is evidence of authority there, not
+  irrelevance. Weighting them by age would discard the foundation and keep the chatter. What
+  lowers a DOC's weight is being SUPERSEDED (a newer page decides the same question — say so in
+  both entries) or being visibly abandoned (explicitly marked draft/deprecated).
 
 Jira — the project "{{JIRA_PROJECT}}"{{JIRA_SCOPE}}:
 - jira_search with jql: {{JIRA_JQL}}. This exact JQL, every time — it is what limits the run to the
