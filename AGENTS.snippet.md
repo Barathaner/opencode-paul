@@ -91,12 +91,12 @@ deciding, and someone already chose what became a ticket.
 1. Pull memory first (see the AGENTSMEMORY section below), then `paul_list` + `paul_cursor`,
    so you know what is already indexed and at which `meta.version`.
 2. Register everyone you encounter with `paul_roles` before writing anything.
-3. Gather Confluence: `confluence_search` (CQL, e.g. `space = SOFTWAREEN AND type = page`),
+3. Gather Confluence: `confluence_search` (CQL, e.g. `space = {{CONFLUENCE_SPACE}} AND type = page`),
    paginated to the end. Documentation lives in TREES — for every page you keep, call
    `confluence_get_page_children` and recurse to the leaves; an arc42 or architecture
    document keeps its substance in the subpages. Skip pages whose version matches the stored
    `meta.version`: they have not changed.
-4. Gather Jira: `jira_search` (JQL like `project = KAN ORDER BY created DESC`) plus
+4. Gather Jira: `jira_search` (JQL like `{{JIRA_JQL}}`) plus
    `jira_get_issue` for detail. Map statuses to backlog|todo|in_progress|blocked|review|done.
 5. SUMMARIZE each page and issue yourself — what it establishes, what is decided, what is
    still open. Your summary is the memory; the page body is not copied.

@@ -199,10 +199,16 @@ tools `paul_list`, `paul_add`, … automatically.
 
 ### Teach the agent when to use it
 
-Append [`AGENTS.snippet.md`](./AGENTS.snippet.md) into your `~/.config/opencode/AGENTS.md`
-(or a project `AGENTS.md`). It documents the workflow — pull state at the start of PAUL
-work, keep statuses truthful, the standard ticket format, and the Jira/Confluence init +
-sync recipes.
+`setup.sh` installs [`AGENTS.snippet.md`](./AGENTS.snippet.md) into your
+`~/.config/opencode/AGENTS.md` and **refreshes it on every re-run**, between the
+`<!-- paul-project-memory:start -->` / `:end` markers — anything you wrote outside them is
+left alone. It documents the workflow — pull state at the start of PAUL work, keep statuses
+truthful, the standard ticket format, and the Jira/Confluence init + sync recipes.
+
+The snippet carries `{{CONFLUENCE_SPACE}}` and `{{JIRA_JQL}}` placeholders that setup fills in
+with your space and your board-scoped search, so the agent is told the same keys the scripts
+use. If you append it by hand instead, substitute those two yourself — otherwise the agent
+searches for the literal placeholder.
 
 ## Atlassian sync (optional)
 

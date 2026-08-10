@@ -487,6 +487,30 @@ ok(renderers.every((s) => /JIRA_JQL\\\}\\\}/.test(s) && /JIRA_SCOPE\\\}\\\}/.tes
 ok(prompt.includes("{{JIRA_JQL}}") && !prompt.includes("ORDER BY created DESC. Page"),
   "init_from_docs prompt takes its JQL from the renderer instead of hardcoding the project")
 
+// AGENTS.md is what the model actually reads. It used to be written once and skipped on
+// every re-run, with the default keys baked in — so paul.env said one project and the
+// agent was told another, for good.
+const snippet = readFileSync(REPO + "AGENTS.snippet.md", "utf8")
+ok(!/space = SOFTWAREEN|project = KAN/.test(snippet)
+   && snippet.includes("{{CONFLUENCE_SPACE}}") && snippet.includes("{{JIRA_JQL}}"),
+  "AGENTS.snippet.md takes the space and the search from setup instead of hardcoding them")
+ok(!/ok "AGENTS\.md already has the PAUL block"/.test(setup)
+   && /paul-project-memory:end/.test(setup) && setup.includes("render_agents_block"),
+  "setup.sh refreshes the AGENTS.md block between its markers instead of skipping it")
+ok(readFileSync(REPO + "scripts/install_command.sh", "utf8").includes("PRINT_JQL")
+   && setup.includes("PRINT_JQL=1"),
+  "setup.sh renders the AGENTS block from the same search as /paul-init-docs (one source)")
+
+// The bootstrap index runs as a child of setup.sh and inherits its environment, which
+// still holds the PREVIOUS paul.env that the shell rc sourced at login.
+const exportsAt = setup.indexOf("export PAUL_JIRA_PROJECT=")
+ok(exportsAt > 0 && exportsAt < setup.indexOf("init_from_docs.sh\" \\"),
+  "setup.sh exports the answers it collected before running the bootstrap index")
+
+// The board list prints ids next to the line numbers; both have to be accepted.
+ok(/\(\.id \| tostring\) == \$i/.test(setup.slice(setup.indexOf("parse_board_pick"))),
+  "setup.sh accepts a board id as well as a line number at the board prompt")
+
 // The loader must not be gated on the token: a shell that already had one used to
 // run without the behaviour switches, which is exactly when they matter.
 ok(SHIPPED_SCRIPTS.every((p) => {

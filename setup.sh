@@ -43,6 +43,12 @@ CONFIG="$OPENCODE_DIR/opencode.json"
 SECRETS="$OPENCODE_DIR/paul.env"
 NONINTERACTIVE="${NONINTERACTIVE:-0}"
 
+# What THIS shell already had exported when setup started, captured before setup writes
+# its own values over them. Used at the very end to say whether the terminal you are
+# sitting in is still on the old settings.
+SHELL_JIRA_PROJECT="${PAUL_JIRA_PROJECT:-}"
+SHELL_CONFLUENCE_SPACE="${PAUL_CONFLUENCE_SPACE:-}"
+
 echo "${BOLD}=== PAUL setup ===${RST}"
 echo "${DIM}Config dir: $OPENCODE_DIR${RST}"
 
@@ -351,8 +357,17 @@ parse_board_pick() {
   for n in $(printf '%s' "$pick" | tr ',;' '  '); do
     [[ "$n" =~ ^[0-9]+$ ]] || return 1
     idx=$((n - 1))
-    [ "$idx" -ge 0 ] && [ "$idx" -lt "$total" ] || return 1
-    ids="${ids:+$ids,}$(jq -r ".[$idx].id" <<<"$BOARDS_JSON")"
+    if [ "$idx" -ge 0 ] && [ "$idx" -lt "$total" ]; then
+      ids="${ids:+$ids,}$(jq -r ".[$idx].id" <<<"$BOARDS_JSON")"
+    # The list prints each board's id, and the id is what ends up in paul.env and in
+    # --board, so typing one here is the natural reading. Accept it rather than reject
+    # it three times and abort. The line number wins when a value could be both; the
+    # confirmation line below prints names AND ids, so either reading is visible.
+    elif jq -e --arg i "$n" 'any(.[]; (.id | tostring) == $i)' <<<"$BOARDS_JSON" >/dev/null 2>&1; then
+      ids="${ids:+$ids,}$n"
+    else
+      return 1
+    fi
   done
   [ -n "$ids" ] || return 1
   printf '%s' "$ids"
@@ -403,10 +418,10 @@ else
     tries=0
     while :; do
       drain_stdin
-      printf "   Which board(s) should PAUL use? ${DIM}(numbers, \"all\", or \"none\") [%s]${RST}: " "$DEF_PICK"
+      printf "   Which board(s) should PAUL use? ${DIM}(line numbers e.g. 1,3 — or the ids — \"all\" / \"none\") [%s]${RST}: " "$DEF_PICK"
       read -r reply
       if PICKED=$(parse_board_pick "${reply:-$DEF_PICK}"); then JIRA_BOARDS="$PICKED"; break; fi
-      warn "'$reply' is not one of the numbers above."
+      warn "'$reply' is not a line number or board id from the list above."
       tries=$((tries + 1))
       [ "$tries" -ge 3 ] && die "Too many invalid board selections."
     done
@@ -502,6 +517,21 @@ chmod 600 "$SECRETS"
 umask 022
 ok "wrote $SECRETS ${DIM}(chmod 600)${RST}"
 
+# The shell that started setup.sh already exported the PREVIOUS paul.env — step 5d adds
+# a `source` line to the rc file, so every shell does — and every PAUL script lets the
+# environment win over the file on purpose. Without re-exporting the answers here, the
+# bootstrap index at the end of this script would run against the values this very run
+# just replaced.
+export ATLASSIAN_API_TOKEN
+export PAUL_JIRA_URL="$JIRA_URL"
+export PAUL_JIRA_EMAIL="$JIRA_EMAIL"
+export PAUL_JIRA_PROJECT="$JIRA_PROJECT"
+export PAUL_CONFLUENCE_SPACE="$CONFLUENCE_SPACE"
+export PAUL_JIRA_BOARDS="$JIRA_BOARDS"
+export PAUL_JIRA_BOARD_NAMES="$JIRA_BOARD_NAMES"
+export PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS"
+export PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS
+
 # 5b. merge opencode.json non-destructively (backup first).
 [ -f "$CONFIG" ] && cp "$CONFIG" "$CONFIG.bak.$(date +%s)" && ok "backed up existing opencode.json"
 [ -f "$CONFIG" ] || echo '{ "$schema": "https://opencode.ai/config.json" }' > "$CONFIG"
@@ -538,11 +568,49 @@ ok "updated $CONFIG (plugin + mcp-atlassian)"
 # so PAUL works immediately either way.
 
 # 5c. install the AGENTS.md behavior block (so the agent knows when to use PAUL).
+#
+# The block carries the space and the search the agent should run, so it has to be
+# REPLACED on a re-run, not skipped. Skipping it meant the agent kept the keys from the
+# first install for good: paul.env said one project, AGENTS.md said another, and
+# AGENTS.md is what the model actually reads.
 AGENTS="$OPENCODE_DIR/AGENTS.md"
-if [ -f "$AGENTS" ] && grep -q "paul-project-memory:start" "$AGENTS"; then
-  ok "AGENTS.md already has the PAUL block"
+
+# One source of truth for the search — the same script that renders /paul-init-docs.
+AGENTS_JQL="$(PRINT_JQL=1 PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS" \
+  "$REPO_DIR/scripts/install_command.sh" "$CONFLUENCE_SPACE" "$JIRA_PROJECT" 2>/dev/null)"
+[ -n "$AGENTS_JQL" ] || AGENTS_JQL="project = \"$JIRA_PROJECT\" ORDER BY created DESC"
+
+render_agents_block() {
+  awk -v space="$CONFLUENCE_SPACE" -v project="$JIRA_PROJECT" -v jql="${AGENTS_JQL//&/\\&}" '
+    {
+      gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
+      gsub(/\{\{JIRA_PROJECT\}\}/, project)
+      gsub(/\{\{JIRA_JQL\}\}/, jql)
+      print
+    }
+  ' "$REPO_DIR/AGENTS.snippet.md"
+}
+
+# Both markers, or the replace would eat the rest of someone's AGENTS.md.
+if [ -f "$AGENTS" ] && grep -q "paul-project-memory:start" "$AGENTS" \
+   && grep -q "paul-project-memory:end" "$AGENTS"; then
+  BLOCK="$AGENTS.block.$$"; TMP_A="$AGENTS.tmp.$$"
+  render_agents_block > "$BLOCK"
+  # Everything outside the two markers is the user's own file and is copied verbatim.
+  awk -v blockfile="$BLOCK" '
+    /<!-- paul-project-memory:start -->/ && !skip {
+      skip = 1
+      while ((getline line < blockfile) > 0) print line
+      close(blockfile)
+      next
+    }
+    skip && /<!-- paul-project-memory:end -->/ { skip = 0; next }
+    !skip { print }
+  ' "$AGENTS" > "$TMP_A" && mv "$TMP_A" "$AGENTS"
+  rm -f "$BLOCK" "$TMP_A"
+  ok "refreshed the PAUL block in $AGENTS ${DIM}(space $CONFLUENCE_SPACE, project $JIRA_PROJECT)${RST}"
 else
-  { [ -f "$AGENTS" ] && echo; cat "$REPO_DIR/AGENTS.snippet.md"; } >> "$AGENTS"
+  { [ -f "$AGENTS" ] && echo; render_agents_block; } >> "$AGENTS"
   ok "appended PAUL block to $AGENTS"
 fi
 
@@ -647,8 +715,20 @@ echo "       ${CYN}$REPO_DIR/scripts/init_from_docs.sh${RST}   ${DIM}or /paul-in
 echo "  2. Try the meeting pipeline on the sample transcript:"
 echo "       ${CYN}$REPO_DIR/process_meetings.sh $REPO_DIR/examples/sample-transcript.json${RST}"
 echo "  3. Or just open OpenCode in any project and ask it to use the paul_* tools."
+
+# A shell started before this run still exports the OLD paul.env (the rc line below puts
+# it there), and every script lets the environment win over the file — so in THIS terminal
+# the scripts above would silently use the settings that were just replaced.
+if { [ -n "$SHELL_JIRA_PROJECT" ] && [ "$SHELL_JIRA_PROJECT" != "$JIRA_PROJECT" ]; } \
+   || { [ -n "$SHELL_CONFLUENCE_SPACE" ] && [ "$SHELL_CONFLUENCE_SPACE" != "$CONFLUENCE_SPACE" ]; }; then
+  echo
+  echo "${YLW}  This terminal still exports the previous settings"
+  echo "  (${SHELL_JIRA_PROJECT:-—} / ${SHELL_CONFLUENCE_SPACE:-—}). Before running any of the above here:${RST}"
+  echo "       ${CYN}source $SECRETS${RST}   ${DIM}or open a new terminal${RST}"
+fi
 echo
-echo "${DIM}The scripts load $SECRETS themselves — no 'source' needed.${RST}"
+echo "${DIM}The scripts read $SECRETS themselves — no 'source' needed in a NEW shell.${RST}"
+echo "${DIM}           A value already exported in your current shell still wins over it.${RST}"
 echo "${DIM}Behaviour: edit $SECRETS to change what PAUL may rewrite or re-rank —${RST}"
 echo "${DIM}           re-running setup.sh keeps whatever you set there.${RST}"
 echo "${DIM}Secrets:   $SECRETS (chmod 600, git-ignored)${RST}"

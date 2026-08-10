@@ -42,6 +42,10 @@ fi
 JQL="${JQL//&/\\&}"
 SCOPE="${SCOPE//&/\\&}"
 
+# setup.sh renders the AGENTS.md block from the same search, and a second copy of this
+# clause is a second place for it to drift. PRINT_JQL=1 hands it over instead.
+if [ "${PRINT_JQL:-0}" = "1" ]; then printf '%s\n' "$JQL"; exit 0; fi
+
 DEST_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/command"
 DEST="$DEST_DIR/paul-init-docs.md"
 
