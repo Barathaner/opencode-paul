@@ -91,13 +91,14 @@ deciding, and someone already chose what became a ticket.
 1. Pull memory first (see the AGENTSMEMORY section below), then `paul_list` + `paul_cursor`,
    so you know what is already indexed and at which `meta.version`.
 2. Register everyone you encounter with `paul_roles` before writing anything.
-3. Gather Confluence: `confluence_search` (CQL, e.g. `space = {{CONFLUENCE_SPACE}} AND type = page`),
-   paginated to the end. Documentation lives in TREES — for every page you keep, call
-   `confluence_get_page_children` and recurse to the leaves; an arc42 or architecture
-   document keeps its substance in the subpages. Skip pages whose version matches the stored
-   `meta.version`: they have not changed.
-4. Gather Jira: `jira_search` (JQL like `{{JIRA_JQL}}`) plus
-   `jira_get_issue` for detail. Map statuses to backlog|todo|in_progress|blocked|review|done.
+3. Gather Confluence: `confluence_get_space_page_tree(space_key = {{CONFLUENCE_SPACE}}, limit
+   1000)` — one call returns every page with its `parent_id`, which is the tree. Do not try to
+   paginate `confluence_search`; it has no offset parameter. Skip pages whose version matches
+   the stored `meta.version`: they have not changed.
+4. Gather Jira: `jira_search` (JQL like `{{JIRA_JQL}}`), paging with `page_token` taken from
+   the previous result's `next_page_token` — `start_at` is ignored on Jira Cloud and returns
+   the same first page forever. Then `jira_get_issue` for detail on the open tickets only.
+   Map statuses to backlog|todo|in_progress|blocked|review|done.
 5. SUMMARIZE each page and issue yourself — what it establishes, what is decided, what is
    still open. Your summary is the memory; the page body is not copied.
 6. Derive the roadmap cursor (what phase/sprint the project is currently in).
@@ -125,7 +126,8 @@ project's roadmap position, its architecture docs, and the gist of prior meeting
 ## Confluence AGENTSMEMORY sync (remote mirror, optional)
 PAUL memory can be mirrored to a Confluence page titled **AGENTSMEMORY**. The page holds a
 human-readable summary plus a hidden JSON block (the exact machine state). Two extra tools
-handle serialization; YOU do the Confluence I/O via mcp-atlassian.
+handle serialization; YOU do the Confluence I/O via the `{{MCP_SERVER}}` server. Where several
+Atlassian servers are configured, each is a different site — use that one, never another.
 
 PULL FIRST — at the START of any task touching Confluence or Jira:
 1. `paul_remote` (no args) to get the known pageId. If unknown, `confluence_search`

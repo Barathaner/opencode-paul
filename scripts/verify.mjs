@@ -532,6 +532,24 @@ ok(/Do NOT try to page confluence_search/.test(prompt)
 ok(/jira_get_issue ONLY for issues whose mapped status is backlog, todo or\s+in_progress/.test(prompt),
   "init_from_docs prompt fetches full issues only for the tickets that get a spec")
 
+// Two Atlassian sites on one machine = two enabled MCP servers = the agent picks one. A
+// privat-profile run searched the WORK tenant, found nothing, and reported success.
+ok(!/the mcp-atlassian tools/.test(prompt) && !/use the mcp-atlassian tools/.test(meetings),
+  "no prompt hardcodes the default server name (which is the WRONG server under a profile)")
+ok(/\{\{MCP_SERVER\}\}/.test(prompt) && renderers.every((s) => /MCP_SERVER\\\}\\\}/.test(s)),
+  "init_from_docs names its own Atlassian server, and both renderers fill it in")
+ok(/\$MCP_KEY/.test(meetings) && /paul_mcp_key/.test(meetings),
+  "process_meetings.sh names its own Atlassian server too (that pipeline writes)")
+const mcpLib = readFileSync(REPO + "scripts/lib/mcp_scope.sh", "utf8")
+ok(/mcp-atlassian%s/.test(mcpLib) && /"enabled": false/.test(mcpLib),
+  "mcp_scope.sh derives the profile's server key and disables the others by name")
+ok([initSh, meetings].every((s) => /OPENCODE_CONFIG_CONTENT="\$MCP_OVERLAY"/.test(s)
+   && /paul_mcp_key_configured/.test(s) && /exit 4/.test(s)),
+  "both pipelines run with the other Atlassian servers disabled, or abort if theirs is missing")
+ok(/\{\{MCP_SERVER\}\}/.test(readFileSync(REPO + "AGENTS.snippet.md", "utf8"))
+   && /gsub\(\/\\\{\\\{MCP_SERVER/.test(setup),
+  "the AGENTS.md block names the profile's server, so in-session work uses it too")
+
 // AGENTS.md is what the model actually reads. It used to be written once and skipped on
 // every re-run, with the default keys baked in — so paul.env said one project and the
 // agent was told another, for good.

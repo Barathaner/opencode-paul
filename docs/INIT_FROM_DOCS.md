@@ -144,6 +144,41 @@ place instead of creating a second copy. Each doc also stores its Confluence `ve
 run, a page whose version is unchanged keeps its existing summary and is not re-read or
 re-summarized, so a repeat index of a large space costs one page fetch each and no model work.
 
+## One machine, several Atlassian sites
+
+`setup.sh` gives each profile its own MCP server — `mcp-atlassian` for the default install,
+`mcp-atlassian-privat` for `PAUL_PROFILE=privat` — and never removes the others, because a new
+profile must not break the install beside it. OpenCode then starts **every** enabled server, so the
+agent sees two complete sets of Jira and Confluence tools and picks one.
+
+That is not hypothetical. A privat-profile run configured for space `SOFTWAREEN` searched the *work*
+tenant, correctly found neither the space nor the project there, and reported a clean "nothing to
+index". Nothing failed; the run just read the wrong company's Jira.
+
+Two layers now prevent it:
+
+1. **The prompt names the server.** Every Atlassian call must go through `<server>_*` tools, with
+   `<server>` substituted at render time. A prompt that says "the mcp-atlassian tools" names the
+   *wrong* server the moment a profile is in play — that string is gone from every prompt.
+2. **The run disables the others.** Before invoking OpenCode, the script builds a config overlay
+   that switches off every other Atlassian server and passes it as `OPENCODE_CONFIG_CONTENT`, which
+   deep-merges over your config for that one run. Your `opencode.json` is not modified. A model that
+   reaches for the wrong prefix anyway finds nothing there.
+
+The run logs which server it used and what it switched off:
+
+```
+[..] Atlassian server: mcp-atlassian-privat (disabled for this run: mcp-atlassian)
+```
+
+If the profile's own server is missing from `opencode.json`, the run aborts with exit code 4 rather
+than starting with no Atlassian tools. `/paul-init-docs` gets layer 1 only — a slash command runs
+inside your session and cannot restart its MCP servers.
+
+> `OPENCODE_CONFIG_CONTENT`, not `OPENCODE_CONFIG`: a config passed by path is ignored whenever
+> `OPENCODE_CONFIG_DIR` is also set, and PAUL supports that variable. Inline content is honoured
+> either way.
+
 ## Board scope: the saved filter is not the board
 
 `setup.sh` asks which board(s) PAUL should use and stores two things per board, both read from

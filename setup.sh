@@ -664,12 +664,13 @@ AGENTS_JQL="$(PRINT_JQL=1 PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS" \
 
 render_agents_block() {
   awk -v space="$CONFLUENCE_SPACE" -v project="$JIRA_PROJECT" -v jql="${AGENTS_JQL//&/\\&}" \
-      -v marker="$MARKER" '
+      -v marker="$MARKER" -v mcp="$MCP_KEY" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
       gsub(/\{\{JIRA_PROJECT\}\}/, project)
       gsub(/\{\{JIRA_JQL\}\}/, jql)
       gsub(/\{\{PROFILE_MARKER\}\}/, marker)
+      gsub(/\{\{MCP_SERVER\}\}/, mcp)
       print
     }
   ' "$REPO_DIR/AGENTS.snippet.md"

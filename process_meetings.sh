@@ -35,6 +35,8 @@
 
 set -uo pipefail
 
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # Settings written by setup.sh, so no caller has to `source` them first.
 # Always read the file — gating this on the token being absent used to mean that
 # a shell which already had a token silently ran without the behaviour switches,
@@ -90,6 +92,12 @@ PROJECT_DIR="${PAUL_PROJECT_DIR:-$AUTOMATION_DIR/paul-${PAUL_PROFILE:-project}}"
 CONFLUENCE_SPACE="${PAUL_CONFLUENCE_SPACE:-SOFTWAREEN}"
 JIRA_PROJECT="${PAUL_JIRA_PROJECT:-KAN}"
 AGENTSMEMORY_TITLE="${PAUL_AGENTSMEMORY_TITLE:-AGENTSMEMORY}"
+
+# Which Atlassian MCP server this profile owns. With two sites installed side by side,
+# both servers are enabled and the agent picks one — this pipeline WRITES, so picking
+# the other one means a meeting page and Jira tickets on the wrong company's site.
+. "$REPO_DIR/scripts/lib/mcp_scope.sh"
+MCP_KEY="$(paul_mcp_key)"
 
 # Role vocabulary the agent must pick people's roles from (comma-separated).
 # Exported so the PAUL tools running inside OpenCode see it; unset = built-in defaults.
@@ -182,6 +190,15 @@ else
   only Jira is left alone. (Set PAUL_REWRITE_DESCRIPTIONS=1 to allow rewriting.)'
 fi
 
+if ! paul_mcp_key_configured "$MCP_KEY"; then
+  log "ERROR: no MCP server '$MCP_KEY' in ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/opencode.json."
+  log "       Run ${PAUL_PROFILE:+PAUL_PROFILE=$PAUL_PROFILE }./setup.sh to create it."
+  log "=================== RUN ABORTED ==================="
+  exit 4
+fi
+MCP_DISABLED="$(paul_mcp_disabled_names "$MCP_KEY")"
+MCP_OVERLAY="$(paul_mcp_overlay "$MCP_KEY")"
+log "Atlassian server: $MCP_KEY${MCP_DISABLED:+ (disabled for this run: $MCP_DISABLED)}"
 log "Invoking OpenCode CLI ($OPENCODE_BIN) with PAUL memory integration..."
 
 # Build the PAUL-aware prompt. PAUL makes the pipeline stateful: pull memory
@@ -191,7 +208,13 @@ You are an AI project manager assistant with PAUL structured memory. PAUL is you
 per-project memory (tools: paul_list, paul_add, paul_update, paul_remove,
 paul_cursor, paul_roles, paul_ticket_body, paul_init, paul_remote,
 paul_export_page, paul_import_page). Work
-through these phases IN ORDER and use the mcp-atlassian tools for all Confluence/Jira I/O.
+through these phases IN ORDER.
+
+EVERY Confluence and Jira call goes through the "$MCP_KEY" server — the tools whose names
+start with \`${MCP_KEY}_\`. This machine may have more than one Atlassian MCP server
+configured, one per site, and they are not interchangeable: another one points at a
+different company's Jira and Confluence, and this run CREATES pages and tickets. If the
+space or project below appears not to exist, stop and say so; never retry on another server.
 
 PHASE 0 — LOAD MEMORY (pull first, before doing anything else):
 - Call paul_remote (no args) to get the known AGENTSMEMORY pageId. If none is
@@ -302,7 +325,13 @@ $TRANSCRIPT_TEXT
 EOF
 
 # Run OpenCode from the PAUL project dir so ctx.worktree -> stable .paul store.
-( cd "$PROJECT_DIR" && "$OPENCODE_BIN" run --auto "$PROMPT" ) 2>&1 | tee -a "$LOG_FILE"
+# OPENCODE_CONFIG_CONTENT merges over the user's config, so the overlay only carries the other
+# Atlassian servers, switched off; it is set only when there was something to switch off.
+if [ -n "$MCP_OVERLAY" ]; then
+  ( cd "$PROJECT_DIR" && OPENCODE_CONFIG_CONTENT="$MCP_OVERLAY" "$OPENCODE_BIN" run --auto "$PROMPT" ) 2>&1 | tee -a "$LOG_FILE"
+else
+  ( cd "$PROJECT_DIR" && "$OPENCODE_BIN" run --auto "$PROMPT" ) 2>&1 | tee -a "$LOG_FILE"
+fi
 
 OPENCODE_EXIT_CODE=${PIPESTATUS[0]}
 

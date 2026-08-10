@@ -445,11 +445,17 @@ PAUL_PROFILE=siteb ./scripts/init_from_docs.sh
 PAUL_PROFILE=siteb ./scripts/reorder_board.sh
 ```
 
-Two rules worth knowing:
+Three rules worth knowing:
 
 - **The token variable is per profile on purpose.** Your shell rc sources each profile's
   token file, and the names differ, so several can be exported at once — that is what lets
   one OpenCode config hold two Atlassian servers.
+- **A run sees only its own Atlassian server.** Both servers are enabled in `opencode.json`, so
+  without this the agent picks one — and a privat-profile run once searched the work tenant, found
+  nothing, and reported success. Every prompt now names the server it must use, and
+  `init_from_docs.sh` / `process_meetings.sh` disable the others for the duration of the run (via
+  `OPENCODE_CONFIG_CONTENT`; your `opencode.json` is not touched). The run logs which server it
+  used and what it switched off, and aborts if the profile's own server is missing.
 - **Under a profile, the settings file wins over your shell.** Without a profile the old
   contract holds (an exported value beats the file, so a one-off override works). With a
   profile that would let one install's `PAUL_JIRA_PROJECT` bleed into another's run, so the

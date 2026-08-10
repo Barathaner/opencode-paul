@@ -5,7 +5,12 @@ Confluence.
 
 PAUL tools available: paul_list, paul_add, paul_update, paul_remove, paul_cursor, paul_roles,
 paul_ticket_body, paul_init, paul_remote, paul_export_page, paul_import_page.
-Atlassian I/O goes through the mcp-atlassian tools.
+
+EVERY Atlassian call goes through the "{{MCP_SERVER}}" server — the tools whose names start
+with `{{MCP_SERVER}}_`. This machine may have more than one Atlassian MCP server configured,
+one per site, and they are not interchangeable: another one points at a different company's
+Jira and Confluence. If a space or project named below appears not to exist, the answer is
+never "try the other server" — it is that this run has nothing to index, which you report.
 
 PHASE 0 — THE READ-ONLY CONTRACT (this governs every later phase):
 

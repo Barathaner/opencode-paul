@@ -32,6 +32,12 @@ BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}"
 # follows the board instead of freezing a copied JQL string.
 . "$REPO_DIR/scripts/lib/jira_scope.sh"
 JQL="$(paul_build_jql "$PROJECT" "$BOARD_FILTERS" "$BOARD_SUBFILTERS")"
+
+# The command runs inside someone's session, where every configured MCP server is live and
+# a second Atlassian site is one wrong tool prefix away. The command cannot disable the
+# others the way the CLI run does, so naming the right one in the prompt is all it has.
+. "$REPO_DIR/scripts/lib/mcp_scope.sh"
+MCP_KEY="$(paul_mcp_key)"
 if [ -n "$BOARD_FILTERS" ]; then
   SCOPE=", board(s) ${BOARD_NAMES:-selected during setup}"
 else
@@ -83,7 +89,8 @@ FRONTMATTER
   # No preflight count here: a slash command runs inside someone's session, with no shell
   # to curl from. "unknown" tells the agent to trust its own enumeration instead.
   awk -v space="$SPACE" -v project="$PROJECT" -v memtitle="$MEM_TITLE" \
-      -v jql="$JQL" -v scope="$SCOPE" -v mode="$MODE_LINE" -v expected="unknown" '
+      -v jql="$JQL" -v scope="$SCOPE" -v mode="$MODE_LINE" -v expected="unknown" \
+      -v mcp="$MCP_KEY" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
       gsub(/\{\{JIRA_PROJECT\}\}/, project)
@@ -91,6 +98,7 @@ FRONTMATTER
       gsub(/\{\{JIRA_JQL\}\}/, jql)
       gsub(/\{\{JIRA_SCOPE\}\}/, scope)
       gsub(/\{\{JIRA_EXPECTED\}\}/, expected)
+      gsub(/\{\{MCP_SERVER\}\}/, mcp)
       if ($0 ~ /\{\{MODE\}\}/) { print mode; next }
       print
     }

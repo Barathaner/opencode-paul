@@ -127,6 +127,9 @@ JIRA_BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}"
 
 # The JQL builder both renderers share, plus the two preflight counters.
 . "$REPO_DIR/scripts/lib/jira_scope.sh"
+# Which Atlassian MCP server this run may use — and how to switch the others off.
+. "$REPO_DIR/scripts/lib/mcp_scope.sh"
+MCP_KEY="$(paul_mcp_key)"
 
 # Exported so the PAUL tools running inside OpenCode see the role vocabulary.
 [ -n "${PAUL_ROLES:-}" ] && export PAUL_ROLES
@@ -292,6 +295,7 @@ render_prompt() {
       -v jql="$JIRA_JQL" \
       -v scope="$JIRA_SCOPE" \
       -v expected="$JIRA_EXPECTED" \
+      -v mcp="$MCP_KEY" \
       -v mode="$MODE_LINE" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
@@ -300,6 +304,7 @@ render_prompt() {
       gsub(/\{\{JIRA_JQL\}\}/, jql)
       gsub(/\{\{JIRA_SCOPE\}\}/, scope)
       gsub(/\{\{JIRA_EXPECTED\}\}/, expected)
+      gsub(/\{\{MCP_SERVER\}\}/, mcp)
       if ($0 ~ /\{\{MODE\}\}/) { print mode; next }
       print
     }
@@ -347,10 +352,29 @@ log "Jira search: $JIRA_JQL"
 log "Jira scope: $JIRA_EXPECTED issues match that search"
 log "PAUL store: $PROJECT_DIR/.paul/memory.json"
 log "Read-only: no Jira issue and no Confluence page other than $AGENTSMEMORY_TITLE will be written."
+
+# One machine can hold several Atlassian sites, one MCP server each, all enabled at once.
+# Naming the server in the prompt is not enough on its own: switch the others off for the
+# duration of this run, so reading the wrong tenant is not something the agent can do.
+if ! paul_mcp_key_configured "$MCP_KEY"; then
+  log "ERROR: no MCP server '$MCP_KEY' in ${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/opencode.json."
+  log "       Run ${PAUL_PROFILE:+PAUL_PROFILE=$PAUL_PROFILE }./setup.sh to create it."
+  log "=================== RUN ABORTED ==================="
+  exit 4
+fi
+MCP_DISABLED="$(paul_mcp_disabled_names "$MCP_KEY")"
+MCP_OVERLAY="$(paul_mcp_overlay "$MCP_KEY")"
+log "Atlassian server: $MCP_KEY${MCP_DISABLED:+ (disabled for this run: $MCP_DISABLED)}"
 log "Invoking OpenCode CLI ($OPENCODE_BIN)..."
 
 # Run OpenCode from the PAUL project dir so ctx.worktree -> stable .paul store.
-( cd "$PROJECT_DIR" && "$OPENCODE_BIN" run --auto "$PROMPT" ) 2>&1 | tee -a "$LOG_FILE"
+# OPENCODE_CONFIG_CONTENT merges over the user's config, so the overlay only carries the servers
+# to switch off; it is set only when there was something to switch off.
+if [ -n "$MCP_OVERLAY" ]; then
+  ( cd "$PROJECT_DIR" && OPENCODE_CONFIG_CONTENT="$MCP_OVERLAY" "$OPENCODE_BIN" run --auto "$PROMPT" ) 2>&1 | tee -a "$LOG_FILE"
+else
+  ( cd "$PROJECT_DIR" && "$OPENCODE_BIN" run --auto "$PROMPT" ) 2>&1 | tee -a "$LOG_FILE"
+fi
 
 OPENCODE_EXIT_CODE=${PIPESTATUS[0]}
 
