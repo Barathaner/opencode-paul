@@ -781,7 +781,11 @@ function renderPageBody(store: Store, roster: Roster): string {
   store = scrubDeep(store, roster)
   const now = new Date().toISOString()
   const tix = store.entries.filter((e) => (e.meta as any)?.source === "jira" || e.type === "ticket" || e.type === "epic")
-  const mtgs = store.entries.filter((e) => (e.meta as any)?.source === "confluence" || e.type === "meeting")
+  const docs = store.entries.filter((e) => e.type === "doc")
+  // Anything else that came from Confluence stays under Meetings — including entries
+  // written before PAUL had a "doc" type, which must not silently vanish from the mirror.
+  const mtgs = store.entries.filter((e) =>
+    e.type !== "doc" && ((e.meta as any)?.source === "confluence" || e.type === "meeting"))
   const byStatus: Record<string, Entry[]> = {}
   for (const e of tix) (byStatus[e.status] ||= []).push(e)
   const order = ["in_progress", "todo", "blocked", "review", "backlog", "done"]
@@ -807,8 +811,48 @@ function renderPageBody(store: Store, roster: Roster): string {
     html += `</ul>`
   }
 
-  html += `<h2>Meetings &amp; docs (${mtgs.length})</h2><ul>`
-  for (const e of mtgs) {
+  // Documentation is a tree, not a list: an arc42 or architecture document keeps its
+  // substance in subpages, so the mirror nests them under their parent the way the
+  // Confluence space does. parentId/parentTitle are stored by paul_init's docs[].
+  html += `<h2>Documentation (${docs.length})</h2>`
+  if (!docs.length) {
+    html += `<p><em>None indexed yet.</em></p>`
+  } else {
+    const byParent = new Map<string, Entry[]>()
+    const indexed = new Set(docs.map((e) => (e.meta as any)?.externalId).filter(Boolean) as string[])
+    for (const e of docs) {
+      const p = (e.meta as any)?.parentId as string | undefined
+      // A subpage whose parent was not indexed is an orphan: render it as a root so
+      // it appears somewhere rather than being dropped with its unreachable parent.
+      const key = p && indexed.has(p) ? p : ""
+      byParent.set(key, [...(byParent.get(key) || []), e])
+    }
+    const byTitle = (a: Entry, b: Entry) => a.title.localeCompare(b.title)
+    const line = (e: Entry) => {
+      const dt = (e.meta as any)?.docType
+      return `<strong>${esc(e.title)}</strong>${dt ? ` <em>(${esc(String(dt))})</em>` : ""}: ${esc(e.details || "")}`
+    }
+    // Depth cap: below it children are flattened, so a cyclic or absurdly deep tree
+    // still renders instead of recursing forever.
+    const children = (e: Entry, depth: number): string => {
+      const kids = byParent.get(((e.meta as any)?.externalId as string) || " ") || []
+      if (!kids.length || depth >= 4) return ""
+      let out = `<ul>`
+      for (const k of [...kids].sort(byTitle)) out += `<li>${line(k)}${children(k, depth + 1)}</li>`
+      return out + `</ul>`
+    }
+    for (const root of [...(byParent.get("") || [])].sort(byTitle)) {
+      const dt = (root.meta as any)?.docType
+      html += `<h3>${esc(root.title)}${dt ? ` (${esc(String(dt))})` : ""}</h3>`
+      html += `<p>${esc(root.details || "")}</p>`
+      html += children(root, 1)
+    }
+  }
+
+  // Meetings stay a flat, dated list — newest first, because recency is what matters.
+  html += `<h2>Meetings (${mtgs.length})</h2><ul>`
+  const dateOf = (e: Entry) => String((e.meta as any)?.date || e.createdAt || "")
+  for (const e of [...mtgs].sort((a, b) => dateOf(b).localeCompare(dateOf(a)))) {
     html += `<li><strong>${esc(e.title)}</strong>: ${esc(e.details || "")}</li>`
   }
   html += `</ul>`

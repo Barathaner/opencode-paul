@@ -64,7 +64,7 @@ ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN ./setup.sh
 | `paul_ticket_body` | Render a ticket/action item/task into the [standard format](./docs/TICKET_FORMAT.md) and report missing fields. |
 | `paul_init` | Seed the store from Atlassian — `docs[]` (specs/decisions/references), `meetings[]` (dated notes) and `tickets[]` (Jira issues), deduped by `externalId`. |
 | `paul_remote` | Get/set the pointer to the Confluence **AGENTSMEMORY** mirror page. |
-| `paul_export_page` | Render memory as a Confluence storage-format body (human summary + hidden lossless JSON block). |
+| `paul_export_page` | Render memory as a Confluence storage-format body — tickets by status, documentation as a tree, meetings newest-first, plus a hidden lossless JSON block. |
 | `paul_import_page` | Merge an AGENTSMEMORY page back into local memory (newer `updatedAt` wins). |
 
 ## The ticket format

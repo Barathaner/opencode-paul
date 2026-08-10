@@ -98,10 +98,46 @@ await P.roles.execute({ people: [{ aliases: ["Karl"], role: "Backend Developer" 
 await P.init.execute({ docs: [{ externalId: "999", title: "Karl's runbook", summary: "Karl owns deploys." }] }, ctx6)
 ok(!/Karl/.test(readFileSync(DIR6 + "/.paul/memory.json", "utf8")), "init: docs[] scrubbed like every other write path")
 
-// And they survive the AGENTSMEMORY round-trip, listed under "Meetings & docs".
+// The mirror renders documentation as a tree, so build one: root -> section -> subsection,
+// plus an orphan whose parent was never indexed, plus a legacy confluence entry with no doc type.
+const TREE = [
+  { externalId: "t-root", title: "arc42 Architecture Documentation", summary: "Root doc.", docType: "spec" },
+  { externalId: "t-05", title: "05 — Building Block View", summary: "Level 1 decomposition.",
+    docType: "spec", parentId: "t-root", parentTitle: "arc42 Architecture Documentation" },
+  { externalId: "t-051", title: "05.1 — Perception Subsystem", summary: "Level 2 whitebox.",
+    docType: "spec", parentId: "t-05", parentTitle: "05 — Building Block View" },
+  { externalId: "t-orphan", title: "Stray Runbook", summary: "Parent never indexed.",
+    docType: "reference", parentId: "not-indexed", parentTitle: "Somewhere Else" },
+]
+const DIR8 = "/tmp/opencode-paul-verify8"
+rmSync(DIR8, { recursive: true, force: true })
+const ctx8 = { worktree: DIR8, directory: DIR8 }
+await P.init.execute({ docs: TREE, meetings: [{ externalId: "m1", title: "Standup", summary: "s", date: "2026-01-02" }] }, ctx8)
+await P.add.execute({ type: "note", title: "Legacy page", details: "pre-doc entry",
+  meta: { source: "confluence", externalId: "legacy-1" } }, ctx8)
+const body8 = readFileSync(J(await P.export_page.execute({}, ctx8)).bodyPath, "utf8")
+const at8 = (s) => body8.indexOf(s)
+
+ok(body8.includes("<h2>Documentation (4)</h2>") && body8.includes("<h2>Meetings (2)</h2>"),
+  "export_page: documentation and meetings are separate sections")
+ok(body8.includes("<h3>arc42 Architecture Documentation (spec)</h3>") &&
+   !body8.includes("<h3>05 — Building Block View"),
+  "export_page: only parentless docs are roots; sections are not top-level")
+ok(at8("<h3>arc42 Architecture Documentation") < at8("05 — Building Block View") &&
+   at8("05 — Building Block View") < at8("05.1 — Perception Subsystem"),
+  "export_page: doc tree nests parent -> section -> subsection in order")
+ok((body8.match(/<ul>/g) || []).length >= 2 && body8.includes("<em>(spec)</em>"),
+  "export_page: children render as nested lists carrying docType")
+ok(body8.includes("<h3>Stray Runbook (reference)</h3>"),
+  "export_page: a doc whose parent was not indexed still renders, as a root")
+ok(at8("Legacy page") > at8("<h2>Meetings (2)</h2>"),
+  "export_page: pre-doc confluence entries still appear under Meetings")
+rmSync(DIR8, { recursive: true, force: true })
+
+// And they survive the AGENTSMEMORY round-trip.
 const e6 = J(await P.export_page.execute({}, ctx6))
 const body6 = readFileSync(e6.bodyPath, "utf8")
-ok(body6.includes("Meetings &amp; docs (2)") && body6.includes("arc42 — Building Block View"),
+ok(body6.includes("Documentation (2)") && body6.includes("arc42 — Building Block View"),
   "export_page: doc entries appear in the human summary")
 const DIR7 = "/tmp/opencode-paul-verify7"
 rmSync(DIR7, { recursive: true, force: true })

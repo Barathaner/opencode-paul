@@ -40,6 +40,11 @@ Summaries are the agent's own compression — what the document establishes, wha
 still open — never a copy of the page. That is the whole point: a future session reads three
 sentences instead of the whole space.
 
+On the `AGENTSMEMORY` page those summaries are rendered the way the space is shaped: a
+**Documentation** section where each tree's root is a heading and its subpages nest beneath it,
+tagged with their `docType`, and a separate **Meetings** section listing the dated notes newest
+first. So an arc42 document reads as one document rather than 26 loose bullets.
+
 ## What it writes — and what it never touches
 
 Writes:
