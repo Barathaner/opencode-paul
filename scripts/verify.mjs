@@ -451,6 +451,42 @@ ok([
 ok(/ask_secret\(\) \{ # ask_secret VAR "prompt" \[stored\]/.test(setup) && /Enter to keep/.test(setup),
   "setup.sh: ask_secret prompts with the stored token rather than skipping the question")
 
+// setup.sh writes `source paul.env` into the shell rc, so from the second run onwards
+// every answer is already exported. A helper that returns early on that value asks
+// nothing ever again — which left no way to enter a rotated API token.
+ok(!/if \[ -n "\$cur" \]; then eval "\$var=\\\$cur"; return; fi/.test(setup)
+   && /\[ -n "\$cur" \] && (def|stored)="\$cur"/.test(setup),
+  "setup.sh: a value already in the environment is a prompt DEFAULT, not a skipped question")
+const askBodies = [...setup.matchAll(/^(ask\w*)\(\) \{[\s\S]*?^\}/gm)].map((m) => m[0])
+ok(askBodies.length === 4 && askBodies.every((b) => !/\$cur[\s\S]*?return/.test(b.split("NONINTERACTIVE")[0])),
+  "setup.sh: no prompt helper returns on $cur before the NONINTERACTIVE check")
+
+// One project can carry several boards, each with its own filter and its own rank
+// field, so the board has to be asked for and then actually used by both consumers.
+ok(setup.includes("rest/agile/1.0/board?projectKeyOrId=")
+   && setup.includes("rest/agile/1.0/board/$id/configuration"),
+  "setup.sh lists the project's boards and reads each selected board's configuration")
+const BOARD_KEYS = ["PAUL_JIRA_BOARDS", "PAUL_JIRA_BOARD_NAMES", "PAUL_JIRA_BOARD_FILTERS"]
+ok(BOARD_KEYS.every((v) => new RegExp(`export ${v}=`).test(setup))
+   && BOARD_KEYS.every((v) => new RegExp(`for v in [\\s\\S]{0,400}${v}`).test(setup))
+   && setup.includes("STORED_PAUL_JIRA_BOARDS"),
+  "setup.sh writes the board selection to paul.env and offers it back as the default")
+ok(BOARD_KEYS.concat("PAUL_JIRA_RANK_FIELD").every((v) =>
+  SHIPPED_SCRIPTS.every((p) => readFileSync(REPO + p, "utf8").includes(v))),
+  "every script's paul.env keep-list carries the board keys (environment still wins)")
+ok(reorder.includes("board/$id/configuration") && reorder.includes("board/$id/issue")
+   && reorder.includes("grep -Fxf"),
+  "reorder_board.sh ranks per board: its own rank field, only the issues actually on it")
+ok(/rankCustomFieldId\\?": %s/.test(reorder) && reorder.includes('f="${f#customfield_}"'),
+  "reorder_board.sh sends the numeric rank field id the Agile API expects")
+const renderers = ["scripts/init_from_docs.sh", "scripts/install_command.sh"]
+  .map((f) => readFileSync(REPO + f, "utf8"))
+ok(renderers.every((s) => /JIRA_JQL\\\}\\\}/.test(s) && /JIRA_SCOPE\\\}\\\}/.test(s)
+   && s.includes("filter = ")),
+  "both prompt renderers scope the Jira search to the selected boards' filters")
+ok(prompt.includes("{{JIRA_JQL}}") && !prompt.includes("ORDER BY created DESC. Page"),
+  "init_from_docs prompt takes its JQL from the renderer instead of hardcoding the project")
+
 // The loader must not be gated on the token: a shell that already had one used to
 // run without the behaviour switches, which is exactly when they matter.
 ok(SHIPPED_SCRIPTS.every((p) => {

@@ -239,10 +239,15 @@ meeting before PAUL knows anything. This entrypoint has the agent **read** what 
 every page in the space, following documentation trees into their subpages, plus every issue in the
 project — summarize it, and write what it learned into PAUL memory:
 
+If you picked boards during setup, "every issue in the project" narrows to what those boards show —
+their saved filters scope the search, so it follows the board rather than a JQL string frozen at
+setup time. `--board 12,21` overrides the selection for one run, `--no-board` ignores it.
+
 ```bash
 ./scripts/init_from_docs.sh              # incremental — safe to repeat
 ./scripts/init_from_docs.sh --reset      # rebuild memory from scratch
 ./scripts/init_from_docs.sh --dry-run    # print the prompt, call nothing
+./scripts/init_from_docs.sh --board 12   # index only what board 12 shows
 ```
 
 Inside an OpenCode session, the same protocol runs as `/paul-init-docs` (installed by `setup.sh`;
@@ -306,7 +311,10 @@ What each run does, in order:
    a team agreed in refinement, and replacing it should be a decision rather than a side effect of
    processing a transcript. It only ever reranks `todo` + `backlog`; `in_progress`, `review`,
    `blocked` and `done` are left untouched. mcp-atlassian has no rank tool, so applying calls the
-   Jira Agile REST API (`PUT /rest/agile/1.0/issue/rank`) directly.
+   Jira Agile REST API (`PUT /rest/agile/1.0/issue/rank`) directly. With boards selected
+   (`PAUL_JIRA_BOARDS`), each board is ranked on its own — its own rank field, only the tickets
+   actually on it — and anything on none of them is reported as untouched rather than silently
+   ranked on whichever board owns the default rank field.
 
 A `processed_files.csv` hash-tracker skips transcripts that were already processed. The
 script runs OpenCode from a dedicated project dir (`PAUL_PROJECT_DIR`, a git repo) so
@@ -321,15 +329,29 @@ All paths and keys are environment-overridable (defaults in parentheses):
 | `PAUL_PROJECT_DIR` | `$PAUL_AUTOMATION_DIR/paul-project` | holds `.paul/memory.json` |
 | `PAUL_CONFLUENCE_SPACE` | `SOFTWAREEN` | Confluence space key |
 | `PAUL_JIRA_PROJECT` | `KAN` | Jira project key |
+| `PAUL_JIRA_BOARDS` | *(empty)* | comma-separated board ids PAUL ranks and indexes; empty = the whole project |
+| `PAUL_JIRA_BOARD_NAMES` | *(empty)* | their names, for readable output — written by `setup.sh` |
+| `PAUL_JIRA_BOARD_FILTERS` | *(empty)* | their saved-filter ids, which scope what `/paul-init-docs` indexes |
 | `PAUL_AGENTSMEMORY_TITLE` | `AGENTSMEMORY` | shared memory page title |
 | `PAUL_ROLES` | built-in list | comma-separated [role vocabulary](./docs/ROLES.md) people are mapped to |
 | `PAUL_PROTECTED_TERMS` | built-in list | comma-separated terms the name scrub must never rewrite |
 | `PAUL_REWRITE_DESCRIPTIONS` | `0` | `1` lets the pipeline replace an existing Jira description with a re-rendered one |
 | `PAUL_REORDER_APPLY` | `0` | `1` actually re-ranks the board; otherwise the reorder is a preview |
 
-The last three are asked during `setup.sh` and stored in `~/.config/opencode/paul.env`; edit that
-file to change them at any time. The scripts read it themselves, and values already exported in your
-shell still win over it.
+The last three behaviour switches are asked during `setup.sh` and stored in
+`~/.config/opencode/paul.env`; edit that file to change them at any time. The scripts read it
+themselves, and values already exported in your shell still win over it.
+
+**Boards.** One Jira project can carry several boards — one per team, one for bugs, a scrum board
+beside a kanban board. They are not interchangeable: each shows its own subset of the project and
+can rank with its own LexoRank field. `setup.sh` lists the project's boards and asks which of them
+PAUL should use; the answer scopes both the board reorder and what `/paul-init-docs` indexes. Pick
+`none` (or leave `PAUL_JIRA_BOARDS` empty) to work on the whole project. Re-run `setup.sh` to change
+the selection — it re-reads the list from Jira and offers your current pick as the default.
+
+`setup.sh` asks every question on every interactive run, including the API token, so rotating a
+token or moving to another site is just a re-run. Presets in the environment become the prompt
+default (Enter keeps them); use `NONINTERACTIVE=1` to answer entirely from the environment.
 
 **Board reorder** (`scripts/reorder_board.sh`, called automatically in step 7, also runnable
 standalone) needs Jira REST credentials — reuse your Atlassian ones:
@@ -341,7 +363,8 @@ standalone) needs Jira REST credentials — reuse your Atlassian ones:
 | `ATLASSIAN_API_TOKEN` | Atlassian API token |
 | `PAUL_REORDER_APPLY=1` | **required to actually rank the board** — without it this is a preview |
 | `PAUL_REORDER_STATUSES` | statuses to rerank (default `todo backlog`) |
-| `PAUL_JIRA_RANK_FIELD` | LexoRank field id (e.g. `customfield_10019`) if your instance needs it |
+| `PAUL_JIRA_BOARDS` | board ids to rank. Each is ranked separately, with its own rank field and only the tickets on it; tickets on none of them are listed as untouched. Empty = one unscoped chain |
+| `PAUL_JIRA_RANK_FIELD` | LexoRank field id (`10019` or `customfield_10019`) — overrides the field read from each board's configuration. Normally unset |
 | `DRY_RUN=1` | force preview mode even when `PAUL_REORDER_APPLY=1` |
 
 Requires the `mcp-atlassian` MCP server wired up (see below) and a working `opencode`

@@ -46,8 +46,9 @@ paul_load_env() {
   [ -f "$f" ] || return 0
   local keep=""
   for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
-           PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
-           PAUL_PROTECTED_TERMS PAUL_ROLES; do
+           PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
+           PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
+           PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
     [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
   done
   . "$f"
@@ -307,6 +308,9 @@ if [ $OPENCODE_EXIT_CODE -eq 0 ]; then
     PAUL_JIRA_EMAIL="${PAUL_JIRA_EMAIL:-${JIRA_USERNAME:-}}" \
     ATLASSIAN_API_TOKEN="${ATLASSIAN_API_TOKEN:-}" \
     PAUL_REORDER_APPLY="${PAUL_REORDER_APPLY:-0}" \
+    PAUL_JIRA_BOARDS="${PAUL_JIRA_BOARDS:-}" \
+    PAUL_JIRA_BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}" \
+    PAUL_JIRA_RANK_FIELD="${PAUL_JIRA_RANK_FIELD:-}" \
       "$REORDER_SCRIPT" 2>&1 | tee -a "$LOG_FILE"
     RC=${PIPESTATUS[0]}
     [ "$RC" -eq 0 ] && log "Board reorder finished." || log "WARN: board reorder exited $RC (memory is still correct; check Jira creds/rank field)."

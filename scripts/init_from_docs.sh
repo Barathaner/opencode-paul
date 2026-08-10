@@ -24,6 +24,11 @@
 #   ./scripts/init_from_docs.sh --reset             # wipe memory and re-index from scratch
 #   ./scripts/init_from_docs.sh --dry-run           # print the prompt, call nothing
 #   ./scripts/init_from_docs.sh --space KEY --project KEY
+#   ./scripts/init_from_docs.sh --board 12,21       # only what those boards show
+#   ./scripts/init_from_docs.sh --no-board          # the whole project, ignoring the config
+#
+# By default it indexes the boards setup.sh selected (PAUL_JIRA_BOARDS); with none
+# selected, the whole Jira project.
 #
 # All paths/keys are overridable via environment (defaults match process_meetings.sh):
 #   OPENCODE_BIN            path to the opencode binary
@@ -32,6 +37,8 @@
 #   PAUL_PROJECT_DIR        project root that holds .paul/memory.json  ($PAUL_AUTOMATION_DIR/paul-project)
 #   PAUL_CONFLUENCE_SPACE   Confluence space key                       (SOFTWAREEN)
 #   PAUL_JIRA_PROJECT       Jira project key                           (KAN)
+#   PAUL_JIRA_BOARDS        board ids to index, comma-separated        (whole project)
+#   PAUL_JIRA_BOARD_FILTERS their saved-filter ids, from setup.sh      (resolved if unset)
 #   PAUL_AGENTSMEMORY_TITLE title of the shared memory page            (AGENTSMEMORY)
 #   PAUL_ROLES              comma-separated role vocabulary            (built-in defaults)
 #
@@ -54,8 +61,9 @@ paul_load_env() {
   [ -f "$f" ] || return 0
   local keep=""
   for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
-           PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
-           PAUL_PROTECTED_TERMS PAUL_ROLES; do
+           PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
+           PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
+           PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
     [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
   done
   . "$f"
@@ -75,6 +83,13 @@ CONFLUENCE_SPACE="${PAUL_CONFLUENCE_SPACE:-SOFTWAREEN}"
 JIRA_PROJECT="${PAUL_JIRA_PROJECT:-KAN}"
 AGENTSMEMORY_TITLE="${PAUL_AGENTSMEMORY_TITLE:-AGENTSMEMORY}"
 
+# Board scope. setup.sh resolves the selected boards to their saved-filter ids, which
+# is what narrows the search: Jira evaluates `filter = <id>` at query time, so the
+# index follows whatever the board shows today instead of a JQL string copied once.
+JIRA_BOARDS="${PAUL_JIRA_BOARDS:-}"
+JIRA_BOARD_FILTERS="${PAUL_JIRA_BOARD_FILTERS:-}"
+JIRA_BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}"
+
 # Exported so the PAUL tools running inside OpenCode see the role vocabulary.
 [ -n "${PAUL_ROLES:-}" ] && export PAUL_ROLES
 
@@ -87,7 +102,12 @@ while [ $# -gt 0 ]; do
     --dry-run)  DRY_RUN=1; shift ;;
     --space)    CONFLUENCE_SPACE="${2:-}"; shift 2 ;;
     --project)  JIRA_PROJECT="${2:-}"; shift 2 ;;
-    -h|--help)  sed -n '2,40p' "$0"; exit 0 ;;
+    # An explicit board list replaces the configured one, filters and names included,
+    # so they cannot describe a different board than the one being indexed.
+    --board|--boards)
+                JIRA_BOARDS="${2:-}"; JIRA_BOARD_FILTERS=""; JIRA_BOARD_NAMES=""; shift 2 ;;
+    --no-board) JIRA_BOARDS=""; JIRA_BOARD_FILTERS=""; JIRA_BOARD_NAMES=""; shift ;;
+    -h|--help)  sed -n '2,46p' "$0"; exit 0 ;;
     *)          echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -129,15 +149,58 @@ else
     so re-sending a page or issue updates it in place."
 fi
 
+# A board id alone does not narrow a search — its saved filter does. Resolve the ids
+# to filter ids when they did not come pre-resolved from setup.sh (i.e. --board).
+resolve_board_filters() {
+  local id out f n base="${PAUL_JIRA_URL:-}"
+  base="${base%/}"
+  [ -n "$JIRA_BOARDS" ] && [ -z "$JIRA_BOARD_FILTERS" ] || return 0
+  command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
+  [ -n "$base" ] && [ -n "${PAUL_JIRA_EMAIL:-}" ] && [ -n "${ATLASSIAN_API_TOKEN:-}" ] || return 0
+  for id in $(printf '%s' "$JIRA_BOARDS" | tr ',;' '  '); do
+    out=$(curl -sS -u "$PAUL_JIRA_EMAIL:$ATLASSIAN_API_TOKEN" -H "Accept: application/json" \
+      "$base/rest/agile/1.0/board/$id/configuration" 2>/dev/null) || continue
+    f=$(printf '%s' "$out" | jq -r '.filter.id // empty' 2>/dev/null)
+    n=$(printf '%s' "$out" | jq -r '.name // empty' 2>/dev/null)
+    [ -n "$f" ] && JIRA_BOARD_FILTERS="${JIRA_BOARD_FILTERS:+$JIRA_BOARD_FILTERS,}$f"
+    [ -n "$n" ] && JIRA_BOARD_NAMES="${JIRA_BOARD_NAMES:+$JIRA_BOARD_NAMES,}$n"
+  done
+}
+resolve_board_filters
+
+# The search the agent runs. Without a board scope this is the string PAUL always used.
+build_jql() {
+  local f clause=""
+  for f in $(printf '%s' "$JIRA_BOARD_FILTERS" | tr ',;' '  '); do
+    clause="${clause:+$clause OR }filter = $f"
+  done
+  if [ -n "$clause" ]; then
+    printf 'project = "%s" AND (%s) ORDER BY created DESC' "$JIRA_PROJECT" "$clause"
+  else
+    printf 'project = "%s" ORDER BY created DESC' "$JIRA_PROJECT"
+  fi
+}
+JIRA_JQL="$(build_jql)"
+JIRA_SCOPE=""
+[ -n "$JIRA_BOARD_FILTERS" ] && JIRA_SCOPE=", board(s) ${JIRA_BOARD_NAMES:-$JIRA_BOARDS}"
+# awk's gsub() reads & in the replacement as "the text that matched", so a board
+# named "R&D" would otherwise render as the placeholder it replaced.
+JIRA_SCOPE="${JIRA_SCOPE//&/\\&}"
+JIRA_JQL="${JIRA_JQL//&/\\&}"
+
 render_prompt() {
   awk -v space="$CONFLUENCE_SPACE" \
       -v project="$JIRA_PROJECT" \
       -v memtitle="$AGENTSMEMORY_TITLE" \
+      -v jql="$JIRA_JQL" \
+      -v scope="$JIRA_SCOPE" \
       -v mode="$MODE_LINE" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
       gsub(/\{\{JIRA_PROJECT\}\}/, project)
       gsub(/\{\{AGENTSMEMORY_TITLE\}\}/, memtitle)
+      gsub(/\{\{JIRA_JQL\}\}/, jql)
+      gsub(/\{\{JIRA_SCOPE\}\}/, scope)
       if ($0 ~ /\{\{MODE\}\}/) { print mode; next }
       print
     }
@@ -147,7 +210,7 @@ render_prompt() {
 PROMPT="$(render_prompt)"
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "--- DRY RUN: rendered prompt (space=$CONFLUENCE_SPACE project=$JIRA_PROJECT reset=$RESET) ---"
+  echo "--- DRY RUN: rendered prompt (space=$CONFLUENCE_SPACE project=$JIRA_PROJECT boards=${JIRA_BOARDS:-none} reset=$RESET) ---"
   echo "$PROMPT"
   echo "--- DRY RUN: nothing was called, nothing was written ---"
   exit 0
@@ -161,7 +224,7 @@ if [ ! -f "$OPENCODE_BIN" ]; then
   exit 1
 fi
 
-log "Space: $CONFLUENCE_SPACE | Jira project: $JIRA_PROJECT | reset: $RESET"
+log "Space: $CONFLUENCE_SPACE | Jira project: $JIRA_PROJECT | boards: ${JIRA_BOARD_NAMES:-${JIRA_BOARDS:-all}} | reset: $RESET"
 log "PAUL store: $PROJECT_DIR/.paul/memory.json"
 log "Read-only: no Jira issue and no Confluence page other than $AGENTSMEMORY_TITLE will be written."
 log "Invoking OpenCode CLI ($OPENCODE_BIN)..."

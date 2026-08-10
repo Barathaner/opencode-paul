@@ -9,9 +9,15 @@
 #   ./setup.sh                 # interactive
 #   NONINTERACTIVE=1 ./setup.sh  # read all answers from env (see VARS below)
 #
-# Answers can be preset via env (interactive prompts are skipped for any that are set):
-#   JIRA_URL, JIRA_EMAIL, ATLASSIAN_API_TOKEN, JIRA_PROJECT, CONFLUENCE_SPACE
+# Answers can be preset via env. Interactively they become the DEFAULT of their prompt
+# (press Enter to keep); with NONINTERACTIVE=1 they are taken as-is and nothing is asked:
+#   JIRA_URL, JIRA_EMAIL, ATLASSIAN_API_TOKEN, JIRA_PROJECT, CONFLUENCE_SPACE, JIRA_BOARDS
 #   PAUL_REWRITE_DESCRIPTIONS, PAUL_REORDER_APPLY, PAUL_PROTECTED_TERMS
+#
+# Every interactive run asks every question, including the API token. This script writes a
+# `source .../paul.env` line into your shell rc, so after the first run the token is always
+# present in the environment — treating that as "already answered" made rotating a token or
+# switching sites impossible through setup.
 #
 # Every answer is written to ~/.config/opencode/paul.env, which is read back at the
 # start of the next run — so editing that file is a supported way to change your
@@ -123,6 +129,7 @@ hdr "3/7  Atlassian connection"
 if [ -f "$SECRETS" ]; then
   eval "$( . "$SECRETS" >/dev/null 2>&1
            for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
+                    PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
                     PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
                     PAUL_PROTECTED_TERMS; do
              printf 'STORED_%s=%q\n' "$v" "${!v-}"
@@ -148,19 +155,29 @@ norm_token() {
   printf '%s' "$1" | tr -d '[:space:]' | sed "s/^[\"']*//; s/[\"']*\$//; s/^\[//; s/\]\$//"
 }
 
-ask() { # ask VAR "prompt" "default"  (skips if VAR already set in env)
+# The four prompt helpers share one rule about a value already in the environment:
+#
+#   NONINTERACTIVE=1 -> it is the answer, nothing is asked (unchanged contract).
+#   interactive      -> it is only the DEFAULT, and the question is still asked.
+#
+# Skipping the question outright is what made setup unable to change anything: step 5d
+# adds a `source paul.env` line to the shell rc, so from the second run onwards every
+# answer is already in the environment and every prompt vanished — including the API
+# token, leaving no way to enter a new one.
+ask() { # ask VAR "prompt" "default"  (env value wins as the default)
   local var="$1" prompt="$2" def="${3:-}" cur="${!1:-}" reply
-  if [ -n "$cur" ]; then eval "$var=\$cur"; return; fi
+  [ -n "$cur" ] && def="$cur"
   if [ "$NONINTERACTIVE" = "1" ]; then eval "$var=\$def"; return; fi
   local d=""; [ -n "$def" ] && d=" ${DIM}[$def]${RST}"
   drain_stdin
   printf "   %s%s: " "$prompt" "$d"; read -r reply
-  eval "$var=\"\${reply:-$def}\""
+  eval "$var=\"\${reply:-\$def}\""
 }
 ask_secret() { # ask_secret VAR "prompt" [stored]  — Enter keeps the stored secret
   local var="$1" prompt="$2" stored="${3:-}" cur="${!1:-}" reply
-  # Set in the environment = an explicit preset; that still skips the prompt.
-  if [ -n "$cur" ]; then eval "$var=\$cur"; return; fi
+  # A token in the environment is a default like any other — it is almost always the
+  # one this script itself put in paul.env, not a fresh answer.
+  [ -n "$cur" ] && stored="$cur"
   if [ "$NONINTERACTIVE" = "1" ]; then eval "$var=\$stored"; return; fi
   local hint=""
   # Show only the last four characters: enough to recognise which token is stored,
@@ -173,7 +190,7 @@ ask_secret() { # ask_secret VAR "prompt" [stored]  — Enter keeps the stored se
 ask_toggle() { # ask_toggle VAR "prompt" "default 0|1"  -> stores 0 or 1
   local var="$1" prompt="$2" def="${3:-0}" cur="${!1:-}" reply
   # "0" is a real answer, so only an UNSET variable counts as unanswered.
-  if [ -n "$cur" ]; then eval "$var=\$cur"; return; fi
+  [ -n "$cur" ] && def="$cur"
   if [ "$NONINTERACTIVE" = "1" ]; then eval "$var=\$def"; return; fi
   local hint="[y/N]"; [ "$def" = "1" ] && hint="[Y/n]"
   drain_stdin
@@ -187,9 +204,9 @@ ask_toggle() { # ask_toggle VAR "prompt" "default 0|1"  -> stores 0 or 1
 
 ask_key() { # ask_key VAR "prompt" "default" "regex" "what it is" [upper]
   local var="$1" prompt="$2" def="$3" re="$4" what="$5" upper="${6:-}" cur="${!1:-}" reply v tries=0
+  [ -n "$cur" ] && def="$cur"
   while :; do
-    if [ -n "$cur" ]; then v="$(norm_token "$cur")"; cur=""
-    elif [ "$NONINTERACTIVE" = "1" ]; then v="$(norm_token "$def")"
+    if [ "$NONINTERACTIVE" = "1" ]; then v="$(norm_token "$def")"
     else
       drain_stdin
       printf "   %s ${DIM}[%s]${RST}: " "$prompt" "$def"; read -r reply
@@ -283,6 +300,138 @@ check_exists JIRA_PROJECT "$JIRA_URL/rest/api/3/project/%s" "Jira project" \
 check_exists CONFLUENCE_SPACE "$CONFLUENCE_URL/rest/api/space/%s" "Confluence space" \
   "Confluence space key" '^~?[A-Za-z0-9_]{1,60}$'
 
+# --- 4b. which board(s) of that project? -------------------------------------
+# One Jira project can carry several boards — one per team, one for bugs, a scrum
+# board next to a kanban board. They are not interchangeable: each board shows its
+# own subset of the project (its saved filter) and can rank with its OWN LexoRank
+# field. So "the board of project X" is not derivable from the project key, and
+# re-ranking without picking one moves tickets on whichever board happens to own
+# the default rank field.
+#
+# An empty selection stays a valid answer: it means "the whole project", which is
+# exactly how PAUL behaved before boards were configurable.
+JIRA_BOARDS="${JIRA_BOARDS:-${STORED_PAUL_JIRA_BOARDS:-}}"
+JIRA_BOARD_NAMES=""
+JIRA_BOARD_FILTERS=""
+
+# All boards of the project as [{id,name,type}], paginating until isLast.
+fetch_boards() {
+  local key="$1" start=0 acc="[]" code page last max
+  while :; do
+    code=$(api_code "$JIRA_URL/rest/agile/1.0/board?projectKeyOrId=$key&maxResults=50&startAt=$start" "$RESP")
+    [ "$code" = "200" ] || return 1
+    page=$(jq -c '[.values[]? | {id: .id, name: .name, type: (.type // "board")}]' "$RESP" 2>/dev/null) || return 1
+    acc=$(jq -c -n --argjson a "$acc" --argjson b "$page" '$a + $b') || return 1
+    last=$(jq -r '.isLast // true' "$RESP" 2>/dev/null)
+    [ "$last" = "true" ] && break
+    max=$(jq -r '.maxResults // 50' "$RESP" 2>/dev/null)
+    start=$((start + ${max:-50}))
+    [ "$start" -ge 1000 ] && break     # runaway guard; nobody has 1000 boards
+  done
+  printf '%s' "$acc"
+}
+
+# Print "1) VXF Kanban  (kanban, id 12)" per board, marking the stored selection.
+list_boards() {
+  jq -r --arg sel ",${JIRA_BOARDS}," '
+    to_entries[] | (.value.id | tostring) as $id
+    | "     \(.key + 1)) \(.value.name)  (\(.value.type), id \($id))"
+      + (if ($sel | contains("," + $id + ",")) then "  [current]" else "" end)
+  ' <<<"$BOARDS_JSON"
+}
+
+# Map "1,3" / "all" / "none" onto a comma-separated list of board ids; "" if unparseable.
+parse_board_pick() {
+  local pick="$1" n ids="" idx total
+  total=$(jq 'length' <<<"$BOARDS_JSON")
+  case "${pick,,}" in
+    all)          jq -r '[.[].id] | join(",")' <<<"$BOARDS_JSON"; return 0 ;;
+    none|-|skip)  printf ''; return 0 ;;
+  esac
+  for n in $(printf '%s' "$pick" | tr ',;' '  '); do
+    [[ "$n" =~ ^[0-9]+$ ]] || return 1
+    idx=$((n - 1))
+    [ "$idx" -ge 0 ] && [ "$idx" -lt "$total" ] || return 1
+    ids="${ids:+$ids,}$(jq -r ".[$idx].id" <<<"$BOARDS_JSON")"
+  done
+  [ -n "$ids" ] || return 1
+  printf '%s' "$ids"
+}
+
+BOARDS_JSON=""
+if [ "$CODE" = "200" ] && [ "${PAUL_SKIP_CHECKS:-0}" != "1" ]; then
+  BOARDS_JSON="$(fetch_boards "$JIRA_PROJECT")" || BOARDS_JSON=""
+fi
+
+if [ -z "$BOARDS_JSON" ] || [ "$BOARDS_JSON" = "[]" ]; then
+  [ "${PAUL_SKIP_CHECKS:-0}" = "1" ] || warn "no Jira board readable for $JIRA_PROJECT — PAUL will work on the whole project"
+  JIRA_BOARDS=""
+else
+  BOARD_COUNT=$(jq 'length' <<<"$BOARDS_JSON")
+  if [ "$BOARD_COUNT" = "1" ]; then
+    # Nothing to choose. Take it, so ranking uses that board's own rank field.
+    JIRA_BOARDS=$(jq -r '.[0].id' <<<"$BOARDS_JSON")
+    ok "board ${BOLD}$(jq -r '.[0].name' <<<"$BOARDS_JSON")${RST} ${DIM}(id $JIRA_BOARDS)${RST}"
+  elif [ "$NONINTERACTIVE" = "1" ]; then
+    # Nobody to ask. Keep a preset/stored selection if every id still exists, else
+    # fall back to the whole project — guessing a board would re-rank the wrong one.
+    KEEP=""
+    for id in $(printf '%s' "$JIRA_BOARDS" | tr ',' ' '); do
+      jq -e --arg i "$id" 'any(.[]; (.id|tostring) == $i)' <<<"$BOARDS_JSON" >/dev/null 2>&1 \
+        && KEEP="${KEEP:+$KEEP,}$id" \
+        || warn "board id $id is not on $JIRA_PROJECT — dropped"
+    done
+    JIRA_BOARDS="$KEEP"
+    if [ -z "$JIRA_BOARDS" ]; then
+      warn "$JIRA_PROJECT has $BOARD_COUNT boards and JIRA_BOARDS is unset — using the whole project."
+      list_boards
+      warn "set JIRA_BOARDS=<id[,id]> and re-run to scope PAUL to specific boards."
+    fi
+  else
+    echo
+    echo "   ${BOLD}$JIRA_PROJECT has $BOARD_COUNT boards.${RST} PAUL ranks and indexes the ones you pick here."
+    list_boards
+    DEF_PICK="all"
+    # A stored selection comes back as the default, expressed in this run's numbering.
+    if [ -n "$JIRA_BOARDS" ]; then
+      DEF_PICK=$(jq -r --arg sel ",${JIRA_BOARDS}," '
+        [ to_entries[] | (.value.id | tostring) as $id
+          | select($sel | contains("," + $id + ",")) | .key + 1 ] | join(",")
+      ' <<<"$BOARDS_JSON")
+      [ -n "$DEF_PICK" ] || DEF_PICK="all"
+    fi
+    tries=0
+    while :; do
+      drain_stdin
+      printf "   Which board(s) should PAUL use? ${DIM}(numbers, \"all\", or \"none\") [%s]${RST}: " "$DEF_PICK"
+      read -r reply
+      if PICKED=$(parse_board_pick "${reply:-$DEF_PICK}"); then JIRA_BOARDS="$PICKED"; break; fi
+      warn "'$reply' is not one of the numbers above."
+      tries=$((tries + 1))
+      [ "$tries" -ge 3 ] && die "Too many invalid board selections."
+    done
+  fi
+fi
+
+# Names (for readable output and a readable paul.env) and each board's saved filter
+# id (what scopes the doc index — Jira resolves `filter = <id>` at query time, so the
+# scope follows the board instead of going stale like a copied JQL string would).
+if [ -n "$JIRA_BOARDS" ] && [ -n "$BOARDS_JSON" ]; then
+  JIRA_BOARD_NAMES=$(jq -r --arg sel ",${JIRA_BOARDS}," \
+    '[ .[] | (.id | tostring) as $id | select($sel | contains("," + $id + ",")) | .name ]
+     | join(",")' <<<"$BOARDS_JSON")
+  for id in $(printf '%s' "$JIRA_BOARDS" | tr ',' ' '); do
+    CFG_CODE=$(api_code "$JIRA_URL/rest/agile/1.0/board/$id/configuration" "$RESP")
+    if [ "$CFG_CODE" = "200" ]; then
+      FID=$(jq -r '.filter.id // empty' "$RESP" 2>/dev/null)
+      [ -n "$FID" ] && JIRA_BOARD_FILTERS="${JIRA_BOARD_FILTERS:+$JIRA_BOARD_FILTERS,}$FID"
+    else
+      warn "could not read board $id configuration (HTTP $CFG_CODE) — it will not narrow the doc index"
+    fi
+  done
+  ok "PAUL will use board(s) ${BOLD}${JIRA_BOARD_NAMES}${RST} ${DIM}(ids $JIRA_BOARDS)${RST}"
+fi
+
 rm -f "$RESP"; trap - EXIT
 
 # --- 5. how much is PAUL allowed to change? ----------------------------------
@@ -299,8 +448,10 @@ ask_toggle PAUL_REWRITE_DESCRIPTIONS \
 
 echo "${DIM}   Board order: PAUL ranks tickets by its own priority order. Answering no still"
 echo "   prints the order it would apply, so you can look before letting it act.${RST}"
+REORDER_TARGET="the $JIRA_PROJECT board"
+[ -n "$JIRA_BOARD_NAMES" ] && REORDER_TARGET="board(s) $JIRA_BOARD_NAMES"
 ask_toggle PAUL_REORDER_APPLY \
-  "Let PAUL re-rank the $JIRA_PROJECT board to match that order?" "${STORED_PAUL_REORDER_APPLY:-0}"
+  "Let PAUL re-rank $REORDER_TARGET to match that order?" "${STORED_PAUL_REORDER_APPLY:-0}"
 
 echo "${DIM}   Names become roles, so a first name that is also a product name gets rewritten:"
 echo "   with a 'Paul' on the team, 'Paul memory' would become 'Full-stack Developer memory'."
@@ -320,6 +471,14 @@ export PAUL_JIRA_URL="$JIRA_URL"
 export PAUL_JIRA_EMAIL="$JIRA_EMAIL"
 export PAUL_JIRA_PROJECT="$JIRA_PROJECT"
 export PAUL_CONFLUENCE_SPACE="$CONFLUENCE_SPACE"
+
+# --- Which board(s) of the project ------------------------------------------
+# Empty = the whole project (how PAUL worked before boards were configurable).
+# Ids scope the board reorder; the filter ids scope what /paul-init-docs indexes.
+# Re-run setup.sh to pick different boards — it re-reads the list from Jira.
+export PAUL_JIRA_BOARDS="$JIRA_BOARDS"
+export PAUL_JIRA_BOARD_NAMES="$JIRA_BOARD_NAMES"
+export PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS"
 
 # --- Behaviour switches -------------------------------------------------------
 # EDIT THESE HERE. Every PAUL script reads this file, and re-running setup.sh
@@ -389,8 +548,9 @@ fi
 
 # 5c-2. install the /paul-init-docs command (bootstrap memory from existing docs).
 if [ -x "$REPO_DIR/scripts/install_command.sh" ]; then
-  if "$REPO_DIR/scripts/install_command.sh" "$CONFLUENCE_SPACE" "$JIRA_PROJECT" >/dev/null 2>&1; then
-    ok "installed /paul-init-docs command ${DIM}(space $CONFLUENCE_SPACE, project $JIRA_PROJECT)${RST}"
+  if PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS" PAUL_JIRA_BOARD_NAMES="$JIRA_BOARD_NAMES" \
+       "$REPO_DIR/scripts/install_command.sh" "$CONFLUENCE_SPACE" "$JIRA_PROJECT" >/dev/null 2>&1; then
+    ok "installed /paul-init-docs command ${DIM}(space $CONFLUENCE_SPACE, project $JIRA_PROJECT${JIRA_BOARD_NAMES:+, boards $JIRA_BOARD_NAMES})${RST}"
   else
     warn "could not install the /paul-init-docs command (run scripts/install_command.sh by hand)"
   fi

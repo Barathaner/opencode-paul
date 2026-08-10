@@ -137,6 +137,8 @@ The script reads the same environment as `process_meetings.sh`, all of it writte
 |---|---|---|
 | `PAUL_CONFLUENCE_SPACE` | `SOFTWAREEN` | space to read |
 | `PAUL_JIRA_PROJECT` | `KAN` | project to read |
+| `PAUL_JIRA_BOARDS` | *(empty)* | board ids to read instead of the whole project (asked at setup) |
+| `PAUL_JIRA_BOARD_FILTERS` | *(empty)* | their saved-filter ids — what actually narrows the search |
 | `PAUL_AGENTSMEMORY_TITLE` | `AGENTSMEMORY` | title of the mirror page |
 | `PAUL_PROJECT_DIR` | `~/opencode_automations/paul-project` | project root holding `.paul/memory.json` |
 | `PAUL_LOG_DIR` | `~/opencode_automations/logs` | where the run log goes |

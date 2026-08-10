@@ -75,8 +75,8 @@ Confluence — the space "{{CONFLUENCE_SPACE}}":
     report which pages you skipped and why.
 - Ignore the AGENTSMEMORY page itself as a source; it is memory, not documentation.
 
-Jira — the project "{{JIRA_PROJECT}}":
-- jira_search with jql: project = "{{JIRA_PROJECT}}" ORDER BY created DESC. Page through all
+Jira — the project "{{JIRA_PROJECT}}"{{JIRA_SCOPE}}:
+- jira_search with jql: {{JIRA_JQL}}. Page through all
   results — the first call returns a page, not the project. RECORD THE TOTAL the search reports
   and keep requesting the next page until you have that many issues. Use jira_get_issue where you
   need the full description.

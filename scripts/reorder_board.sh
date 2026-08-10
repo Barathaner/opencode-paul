@@ -14,6 +14,12 @@
 #   - Sorts them by PAUL 'order' (lower = higher priority = higher in the column)
 #   - Chains Jira ranks so they appear in that order in their column.
 #
+# BOARD SCOPE: one project can carry several boards, each showing its own subset of
+# the project and each able to rank with its OWN LexoRank field. With
+# PAUL_JIRA_BOARDS set (setup.sh asks for it), this script ranks each selected board
+# separately, using that board's rank field and only the tickets actually on it;
+# tickets on none of them are listed as skipped. Unset = the old unscoped behaviour.
+#
 # It DOES NOT touch in_progress / review / blocked / done tickets — their rank
 # is left exactly as-is, so the in-progress and done columns keep their order.
 #
@@ -32,8 +38,9 @@
 #   PAUL_REORDER_APPLY=1     actually rank the board (without it this is a preview)
 #   PAUL_PROJECT_DIR         defaults to $HOME/opencode_automations/paul-project
 #   PAUL_REORDER_STATUSES    space-separated PAUL statuses to reorder (default: "todo backlog")
-#   PAUL_JIRA_RANK_FIELD     LexoRank custom field id (e.g. customfield_10019) if the
-#                            instance requires it; usually auto-detected, leave unset.
+#   PAUL_JIRA_BOARDS         comma-separated board ids to rank (default: all tickets, no scope)
+#   PAUL_JIRA_RANK_FIELD     LexoRank custom field id (10019 or customfield_10019) — overrides
+#                            the field read from each board's configuration. Leave unset.
 #   DRY_RUN=1                force preview mode even when PAUL_REORDER_APPLY=1.
 
 set -uo pipefail
@@ -49,8 +56,9 @@ paul_load_env() {
   [ -f "$f" ] || return 0
   local keep=""
   for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
-           PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
-           PAUL_PROTECTED_TERMS PAUL_ROLES; do
+           PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
+           PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
+           PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
     [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
   done
   . "$f"
@@ -105,54 +113,149 @@ if [ -z "$ORDERED_KEYS" ]; then
 fi
 
 COUNT=$(echo "$ORDERED_KEYS" | wc -l)
-# Applying rewrites the column order of a live board, so say out loud which board
-# and which store, in one line, before doing it. A run that turns out to have been
-# pointed at the wrong store is not recoverable — Jira keeps no rank history.
-if [ "$DRY_RUN" != "1" ]; then
-  info "APPLYING to $PAUL_JIRA_URL — $COUNT issue(s) from $STORE"
-fi
-if [ "$DRY_RUN" = "1" ]; then
-  info "PREVIEW — $COUNT ticket(s) in columns [$REORDER_STATUSES] WOULD be ranked in this order:"
-else
-  info "Reordering $COUNT ticket(s) in columns [$REORDER_STATUSES] by PAUL order:"
-fi
-echo "$ORDERED_KEYS" | nl -ba | sed 's/^/[reorder]   /'
 
-RANK_URL="${PAUL_JIRA_URL:-}"
-RANK_URL="${RANK_URL%/}/rest/agile/1.0/issue/rank"
+JIRA_BASE="${PAUL_JIRA_URL:-}"
+JIRA_BASE="${JIRA_BASE%/}"
+RANK_URL="$JIRA_BASE/rest/agile/1.0/issue/rank"
 
-# Chain each ticket to rank AFTER the previous one → exact top-to-bottom order.
-PREV=""
-RANK_FIELD_JSON=""
-if [ -n "${PAUL_JIRA_RANK_FIELD:-}" ]; then
-  RANK_FIELD_JSON=", \"rankCustomFieldId\": \"${PAUL_JIRA_RANK_FIELD}\""
-fi
+# GET a Jira URL with the configured credentials; body on stdout, non-200 is an error.
+jira_get() {
+  local url="$1" out code
+  out="$(mktemp)"
+  code=$(curl -sS -o "$out" -w '%{http_code}' \
+    -u "$PAUL_JIRA_EMAIL:$ATLASSIAN_API_TOKEN" \
+    -H "Accept: application/json" "$url" 2>/dev/null || echo 000)
+  if [ "$code" = "200" ]; then cat "$out"; rm -f "$out"; return 0; fi
+  rm -f "$out"
+  err "GET ${url#"$JIRA_BASE"} returned HTTP $code"
+  return 1
+}
 
+# Every issue key currently on a board, in board order, paginated.
+board_issue_keys() {
+  local id="$1" start=0 page n total
+  while :; do
+    page=$(jira_get "$JIRA_BASE/rest/agile/1.0/board/$id/issue?fields=key&maxResults=100&startAt=$start") || return 1
+    n=$(printf '%s' "$page" | jq -r '(.issues // []) | length')
+    [ "${n:-0}" -eq 0 ] && break
+    printf '%s' "$page" | jq -r '.issues[].key'
+    start=$((start + n))
+    total=$(printf '%s' "$page" | jq -r '.total // -1')
+    [ "${total:-0}" -ge 0 ] && [ "$start" -ge "$total" ] && break
+    [ "$start" -ge 5000 ] && break      # runaway guard
+  done
+  return 0
+}
+
+# The board's own LexoRank field. Boards on one project can differ, which is why
+# this is read per board rather than configured once.
+board_rank_field() {
+  local id="$1" cfg
+  cfg=$(jira_get "$JIRA_BASE/rest/agile/1.0/board/$id/configuration") || return 1
+  printf '%s' "$cfg" | jq -r '.ranking.rankCustomFieldId // empty'
+}
+
+# The rank API wants the NUMERIC custom field id, so accept either spelling of it.
+rank_field_json() {
+  local f="${1:-}"
+  f="${f#customfield_}"
+  [ -n "$f" ] || { printf ''; return 0; }
+  printf ', "rankCustomFieldId": %s' "$f"
+}
+
+# Rank one already-ordered list of keys, chaining each ticket AFTER the previous one
+# so the whole set lands in exactly that top-to-bottom order.
 FAILS=0
-while IFS= read -r KEY; do
-  [ -z "$KEY" ] && continue
-  if [ -z "$PREV" ]; then
-    PREV="$KEY"        # first key is the anchor (stays highest of the set)
-    continue
-  fi
-  BODY="{\"issues\": [\"$KEY\"], \"rankAfterIssue\": \"$PREV\"${RANK_FIELD_JSON}}"
-  if [ "$DRY_RUN" = "1" ]; then
-    echo "[reorder] DRY_RUN PUT $RANK_URL  ->  rank $KEY after $PREV"
-  else
-    HTTP=$(curl -sS -o /tmp/paul_rank_resp.$$ -w '%{http_code}' \
-      -u "$PAUL_JIRA_EMAIL:$ATLASSIAN_API_TOKEN" \
-      -X PUT -H "Content-Type: application/json" \
-      --data "$BODY" "$RANK_URL")
-    if [ "$HTTP" = "204" ]; then
-      info "ranked $KEY after $PREV (204)"
-    else
-      err "rank $KEY after $PREV failed (HTTP $HTTP): $(cat /tmp/paul_rank_resp.$$ 2>/dev/null | head -c 300)"
-      FAILS=$((FAILS+1))
+rank_chain() { # rank_chain "<keys, one per line>" "<rank field or empty>" "<label>"
+  local keys="$1" field="$2" label="$3" prev="" key body http field_json resp
+  field_json="$(rank_field_json "$field")"
+  while IFS= read -r key; do
+    [ -z "$key" ] && continue
+    if [ -z "$prev" ]; then
+      prev="$key"      # first key is the anchor (stays highest of the set)
+      continue
     fi
-    rm -f /tmp/paul_rank_resp.$$
+    body="{\"issues\": [\"$key\"], \"rankAfterIssue\": \"$prev\"${field_json}}"
+    if [ "$DRY_RUN" = "1" ]; then
+      echo "[reorder] DRY_RUN PUT $RANK_URL  ->  rank $key after $prev${label:+  ($label)}"
+    else
+      resp="$(mktemp)"
+      http=$(curl -sS -o "$resp" -w '%{http_code}' \
+        -u "$PAUL_JIRA_EMAIL:$ATLASSIAN_API_TOKEN" \
+        -X PUT -H "Content-Type: application/json" \
+        --data "$body" "$RANK_URL")
+      if [ "$http" = "204" ]; then
+        info "ranked $key after $prev (204)"
+      else
+        err "rank $key after $prev failed (HTTP $http): $(head -c 300 "$resp" 2>/dev/null)"
+        FAILS=$((FAILS+1))
+      fi
+      rm -f "$resp"
+    fi
+    prev="$key"
+  done <<< "$keys"
+}
+
+# --- board scope -------------------------------------------------------------
+# Reading a board needs credentials, which a preview otherwise does not. Rather
+# than fail a preview, say that it is unscoped and show the whole list.
+BOARDS="${PAUL_JIRA_BOARDS:-}"
+if [ -n "$BOARDS" ] && { [ -z "${PAUL_JIRA_URL:-}" ] || [ -z "${PAUL_JIRA_EMAIL:-}" ] || [ -z "${ATLASSIAN_API_TOKEN:-}" ]; }; then
+  info "no Jira credentials — cannot read board membership; previewing UNSCOPED."
+  BOARDS=""
+fi
+
+if [ -z "$BOARDS" ]; then
+  # Unscoped: every todo/backlog ticket in memory, one chain, as PAUL always did.
+  if [ "$DRY_RUN" != "1" ]; then
+    info "APPLYING to $PAUL_JIRA_URL — $COUNT issue(s) from $STORE (no board scope)"
+    info "Reordering $COUNT ticket(s) in columns [$REORDER_STATUSES] by PAUL order:"
+  else
+    info "PREVIEW — $COUNT ticket(s) in columns [$REORDER_STATUSES] WOULD be ranked in this order:"
   fi
-  PREV="$KEY"
-done <<< "$ORDERED_KEYS"
+  echo "$ORDERED_KEYS" | nl -ba | sed 's/^/[reorder]   /'
+  rank_chain "$ORDERED_KEYS" "${PAUL_JIRA_RANK_FIELD:-}" ""
+else
+  BOARD_LABEL="${PAUL_JIRA_BOARD_NAMES:-$BOARDS}"
+  if [ "$DRY_RUN" != "1" ]; then
+    info "APPLYING to $PAUL_JIRA_URL — board(s) $BOARD_LABEL — from $STORE"
+  else
+    info "PREVIEW — board(s) $BOARD_LABEL, columns [$REORDER_STATUSES]:"
+  fi
+
+  MATCHED=""
+  for BOARD_ID in $(printf '%s' "$BOARDS" | tr ',;' '  '); do
+    BOARD_KEYS=$(board_issue_keys "$BOARD_ID") || { err "skipping board $BOARD_ID — its issues could not be read."; FAILS=$((FAILS+1)); continue; }
+    if [ -z "$BOARD_KEYS" ]; then
+      info "board $BOARD_ID holds no issues — nothing to rank there."
+      continue
+    fi
+    # Intersect with PAUL's list, keeping PAUL's order (grep -x -F, not sort/comm).
+    SUBSET=$(printf '%s\n' "$ORDERED_KEYS" | grep -Fxf <(printf '%s\n' "$BOARD_KEYS") || true)
+    if [ -z "$SUBSET" ]; then
+      info "board $BOARD_ID: none of PAUL's todo/backlog tickets are on it — skipped."
+      continue
+    fi
+    FIELD="${PAUL_JIRA_RANK_FIELD:-}"
+    if [ -z "$FIELD" ]; then
+      FIELD=$(board_rank_field "$BOARD_ID") || FIELD=""
+      [ -n "$FIELD" ] || info "board $BOARD_ID: rank field not readable — using the instance default."
+    fi
+    info "board $BOARD_ID: $(printf '%s\n' "$SUBSET" | wc -l) ticket(s), rank field ${FIELD:-default}:"
+    printf '%s\n' "$SUBSET" | nl -ba | sed 's/^/[reorder]   /'
+    rank_chain "$SUBSET" "$FIELD" "board $BOARD_ID"
+    MATCHED="$MATCHED
+$SUBSET"
+  done
+
+  # Tickets PAUL wants ordered that live on no selected board are left completely
+  # alone — saying so is the point, otherwise their absence looks like a failure.
+  SKIPPED=$(printf '%s\n' "$ORDERED_KEYS" | grep -Fxv -f <(printf '%s\n' "$MATCHED" | grep -v '^$') || true)
+  if [ -n "$SKIPPED" ]; then
+    info "$(printf '%s\n' "$SKIPPED" | wc -l) ticket(s) not on the selected board(s) — untouched:"
+    printf '%s\n' "$SKIPPED" | sed 's/^/[reorder]   - /'
+  fi
+fi
 
 if [ "$FAILS" -gt 0 ]; then
   err "$FAILS rank call(s) failed."
