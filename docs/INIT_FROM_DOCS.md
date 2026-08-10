@@ -98,6 +98,11 @@ That failure is silent by nature, which is why each index now reconciles itself:
 
 - The agent passes the **totals the sources reported** (`coverage.jiraExpected`,
   `coverage.confluenceExpected`) plus every item it deliberately skipped, with a reason.
+  `confluenceExpected` counts the pages **in scope** — the documentation trees this run was asked
+  to read — not the whole space, or a run scoped to one tree would report the rest of the space as
+  missing and the gap signal would mean nothing. The space total rides along as
+  `coverage.confluenceTotal`, context only, never reconciled, so a deliberately scoped index stays
+  distinguishable from a truncated one. With no root configured the two are the same number.
 - `paul_init` computes `expected − (indexed + skipped)` and records anything left over as a **gap**.
 - Gaps appear at the top of the `AGENTSMEMORY` page under **Coverage**, and come back from
   `paul_list`, so the next session knows the list it is reading is not the whole project.

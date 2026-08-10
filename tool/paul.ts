@@ -69,6 +69,7 @@ type Coverage = {
   complete: boolean          // caller asserted full coverage AND no gap was found
   jira?: { expected?: number; indexed: number; skipped: number }
   confluence?: { expected?: number; indexed: number; skipped: number }
+  confluenceTotal?: number   // whole-space page count; context for a scoped index, never reconciled
   skipped?: { externalId: string; title?: string; reason: string; source?: string }[]
   gaps?: string[]            // human-readable description of every unexplained difference
 }
@@ -727,7 +728,13 @@ export const init = tool({
         "How many issues the Jira search reported IN TOTAL for the project (the 'total' field), " +
         "not how many you sent. This is what lets PAUL detect that it silently missed some."),
       confluenceExpected: S.number().optional().describe(
-        "How many pages the Confluence space contains in total, including ones you chose to skip."),
+        "How many Confluence pages were IN SCOPE for this index — the documentation trees it was " +
+        "asked to read, including ones you chose to skip. Equal to the space total when the whole " +
+        "space is in scope. This is the number reconciled against the store, so passing the space " +
+        "total on a scoped run reports every out-of-scope page as a gap."),
+      confluenceTotal: S.number().optional().describe(
+        "How many pages the whole space contains, scoped or not. Context only, never reconciled: " +
+        "it is what makes a deliberately scoped run distinguishable from a truncated one."),
       complete: S.boolean().optional().describe(
         "True only if you paginated to the end of BOTH sources and every item is either indexed " +
         "or listed in skipped[]. Setting this when it is not true is how duplicates get created " +
@@ -891,7 +898,7 @@ export const init = tool({
     // Compare what the source said exists against what actually landed here. The
     // agent asserts nothing; the numbers do the arguing.
     const cov = args.coverage as {
-      jiraExpected?: number; confluenceExpected?: number; complete?: boolean
+      jiraExpected?: number; confluenceExpected?: number; confluenceTotal?: number; complete?: boolean
       skipped?: { externalId: string; title?: string; reason: string; source?: string }[]
     } | undefined
     const staleSources: string[] = []
@@ -917,6 +924,8 @@ export const init = tool({
           staleSources.push(src)
         }
       }
+      // Not reconciled — an index scoped to one tree is not missing the rest of the space.
+      if (cov.confluenceTotal !== undefined) coverage.confluenceTotal = cov.confluenceTotal
       if (gaps.length) coverage.gaps = gaps
       coverage.complete = !!cov.complete && !gaps.length
       store.coverage = coverage
@@ -987,7 +996,14 @@ function renderPageBody(store: Store, roster: Roster): string {
   if (cv) {
     const part = (label: string, c?: { expected?: number; indexed: number; skipped: number }) =>
       c ? `${label}: ${c.indexed} indexed${c.skipped ? `, ${c.skipped} skipped` : ""}${c.expected !== undefined ? ` of ${c.expected}` : ""}` : ""
-    const parts = [part("Jira", cv.jira), part("Confluence", cv.confluence)].filter(Boolean)
+    // Say so when the index covered a chosen part of the space rather than all of it,
+    // or a reader takes "42 of 42" for the whole space and it was one tree of twelve.
+    const scoped = cv.confluenceTotal !== undefined && cv.confluence?.expected !== undefined
+      && cv.confluenceTotal > cv.confluence.expected
+    const parts = [
+      part("Jira", cv.jira),
+      part("Confluence", cv.confluence) + (scoped ? ` (scoped; space has ${cv.confluenceTotal})` : ""),
+    ].filter(Boolean)
     // Escape each part, then join with the raw entity — escaping the joined string
     // would publish a literal "&amp;middot;".
     html += `<h2>Coverage</h2><p><strong>Last indexed:</strong> ${esc(cv.checkedAt)}<br/>` +

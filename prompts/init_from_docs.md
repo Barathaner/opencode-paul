@@ -65,8 +65,9 @@ PHASE 3 — READ THE DOCUMENTATION (read-only; PHASE 0 still applies):
 Confluence — the space "{{CONFLUENCE_SPACE}}":
 - ENUMERATE THE SPACE WITH ONE CALL: confluence_get_space_page_tree(space_key="{{CONFLUENCE_SPACE}}",
   limit=1000). It returns every page as { id, title, parent_id, position, depth } plus total_pages.
-  That list IS the space — it is what you index against, and total_pages is the confluenceExpected
-  you pass to paul_init. If the result carries has_more, say so in your final report.
+  That list IS the space — it is what you index against. total_pages is the SPACE total; the number
+  you pass as confluenceExpected is how many of those pages are in scope (see SCOPE below), which is
+  the same number when no root is configured. If the result carries has_more, say so in your report.
 - Do NOT try to page confluence_search. It has no offset parameter at all — only query, limit
   (1-50) and spaces_filter — so calling it again with different arguments returns the same first
   batch and tells you nothing new. Use it for exactly one thing: finding the AGENTSMEMORY page by
@@ -122,8 +123,9 @@ SCOPE — WHICH TREES ARE IN{{CONFLUENCE_SCOPE}}:
   descendant, followed through parent_id in the tree you already fetched. No extra calls: the tree
   has the whole structure. A page outside those trees is out of scope: it is neither indexed nor
   listed in skipped[], because it was never in the run.
-- confluenceExpected is then the number of pages IN SCOPE, not total_pages. Report total_pages
-  separately in your final report so the difference is visible.
+- confluenceExpected is then the number of pages IN SCOPE, not total_pages. Pass total_pages as
+  confluenceTotal alongside it, so the space size stays visible and a deliberately scoped run is
+  distinguishable from one that got truncated.
 - This is what makes "complete" mean something. "I read the whole space" cannot be verified on a
   large space; "I read these trees, all of them" can.
 
@@ -196,10 +198,15 @@ Call paul_init ONCE with:
   * cursorPhase / cursorNote: where the project stands right now, derived from what you read — the
     current phase or sprint, and one short note on the current focus and the next step.
   * coverage: { jiraExpected: <{{JIRA_EXPECTED}}, or your enumerated count if that reads "unknown">,
-                confluenceExpected: <total_pages from the space page tree>,
+                confluenceExpected: <pages IN SCOPE — the chosen trees and their descendants;
+                                     equal to total_pages when no root is configured>,
+                confluenceTotal: <total_pages from the space page tree, scoped or not>,
                 complete: <true only if the Jira search ran out of next_page_token AND the page
                            tree came back without has_more>,
                 skipped: [{ externalId, title, reason, source }] }
+    confluenceExpected is what gets reconciled, so it must count the same pages the run was asked
+    to read. Passing the space total on a scoped run reports every out-of-scope page as missing,
+    which makes a correct run look broken and hides a run that really is.
     Every page or issue you chose not to index goes in skipped[] with its reason ("template",
     "space home", "empty stub", "the memory page itself"). PAUL subtracts indexed + skipped from
     the expected total and records whatever is left over as a gap.

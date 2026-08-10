@@ -169,6 +169,26 @@ ok(gap.coverage.complete === false,
   "coverage: complete cannot be asserted while a gap exists (the agent said true; the numbers said no)")
 ok(gap.markedStale === 0, "staleness: nothing is marked stale while coverage is incomplete")
 
+// A run scoped to one documentation tree reconciles against that tree, not the space.
+// Reconciling against the space total made every scoped run report the rest of it as a
+// gap — a correct run looked broken, and a broken one looked exactly the same.
+const DIR10 = "/tmp/opencode-paul-verify10"
+rmSync(DIR10, { recursive: true, force: true })
+const ctx10 = { worktree: DIR10, directory: DIR10 }
+const scoped = J(await P.init.execute({
+  docs: [{ externalId: "1", title: "A", summary: "s" }, { externalId: "2", title: "B", summary: "s" }],
+  coverage: { confluenceExpected: 3, confluenceTotal: 500, complete: true,
+              skipped: [{ externalId: "3", title: "C", reason: "template", source: "confluence" }] },
+}, ctx10))
+ok(scoped.coverage.complete === true && !scoped.coverage.gaps,
+  "coverage: a scoped index reconciles against the pages in scope, not the whole space")
+ok(scoped.coverage.confluenceTotal === 500 && scoped.coverage.confluence.expected === 3,
+  "coverage: the space total is kept beside the in-scope count, never reconciled against")
+const scopedBody = readFileSync(J(await P.export_page.execute({}, ctx10)).bodyPath, "utf8")
+ok(/2 indexed, 1 skipped of 3 \(scoped; space has 500\)/.test(scopedBody),
+  "coverage: the mirror says the index was scoped, so 'of 3' cannot read as the whole space")
+rmSync(DIR10, { recursive: true, force: true })
+
 // Now account for everything: 9 indexed + 1 skipped = 10.
 const accounted = J(await P.init.execute({
   tickets: tix(9),
@@ -542,6 +562,18 @@ ok(storageCalls.length === 1 && /CDATA/.test(prompt),
 ok(/SPLIT THE WORK ACROSS SUBAGENTS/.test(prompt) && /EXACTLY ONE branch/.test(prompt)
    && /read-only contract restated in full/.test(prompt),
   "init_from_docs prompt fans out per tree, assigns each page once, and rebinds the contract")
+
+// confluenceExpected is the number that gets reconciled. Defining it twice — once as
+// the space total, once as the in-scope count — made every scoped run report the rest
+// of the space as a gap, so a correct run looked broken and a broken one looked normal.
+ok(!/confluenceExpected: <total_pages/.test(prompt)
+   && /confluenceExpected: <pages IN SCOPE/.test(prompt)
+   && /confluenceTotal: <total_pages/.test(prompt),
+  "init_from_docs prompt reconciles the in-scope page count and reports the space total beside it")
+const paulTs = readFileSync(REPO + "tool/paul.ts", "utf8")
+ok(/confluenceTotal\?: number/.test(paulTs) && /confluenceTotal: S\.number\(\)/.test(paulTs)
+   && /never reconciled/.test(paulTs),
+  "paul_init accepts confluenceTotal as context and never reconciles against it")
 
 // A board's saved filter is the WHOLE project on a default Kanban board; the sub-filter is
 // what the board actually shows. Reading only the filter turns a 130-ticket board into a
