@@ -392,12 +392,10 @@ const canRun = (p) => { try { accessSync(REPO + p, constants.X_OK); return true 
 ok(canRun("scripts/init_from_docs.sh"), "init_from_docs.sh: present and executable")
 ok(canRun("scripts/install_command.sh"), "install_command.sh: present and executable")
 
-// The scripts must not need a `source` step — each loads paul.env when the env has no token.
+// The scripts must not need a `source` step — each loads paul.env itself.
 const SHIPPED_SCRIPTS = ["scripts/init_from_docs.sh", "process_meetings.sh", "scripts/reorder_board.sh"]
-ok(SHIPPED_SCRIPTS.every((p) => {
-  const s = readFileSync(REPO + p, "utf8")
-  return s.includes("paul.env") && s.includes('[ -z "${ATLASSIAN_API_TOKEN:-}" ]')
-}), "scripts load paul.env themselves (no manual `source` step)")
+ok(SHIPPED_SCRIPTS.every((p) => readFileSync(REPO + p, "utf8").includes("paul.env")),
+  "scripts load paul.env themselves (no manual `source` step)")
 
 // 9) Packaging: an npm install must ship everything the shipped scripts read at runtime.
 const pkg = JSON.parse(readFileSync(REPO + "package.json", "utf8"))
@@ -426,6 +424,22 @@ ok(meetings.includes("PAUL_REWRITE_DESCRIPTIONS") && meetings.includes("DO NOT m
   "process_meetings.sh leaves existing Jira descriptions alone unless PAUL_REWRITE_DESCRIPTIONS=1")
 ok(prompt.includes("jiraExpected") && prompt.includes("COVERAGE IS NOT A FORMALITY"),
   "init_from_docs: the prompt collects the source totals so coverage can be reconciled")
+
+// setup.sh must ask about the behaviour switches and store them where it says it does.
+const SWITCHES = ["PAUL_REWRITE_DESCRIPTIONS", "PAUL_REORDER_APPLY", "PAUL_PROTECTED_TERMS"]
+ok(SWITCHES.every((v) => setup.includes(`ask_toggle ${v}`) || setup.includes(`ask ${v}`)),
+  "setup.sh asks about all three behaviour switches")
+ok(SWITCHES.every((v) => new RegExp(`export ${v}=`).test(setup)),
+  "setup.sh writes all three switches into paul.env")
+ok(/\[ -f "\$SECRETS" \] && \. "\$SECRETS"/.test(setup) && /EDIT THESE HERE/.test(setup),
+  "setup.sh re-reads paul.env first, so a hand-edited answer survives a re-run, and says so")
+
+// The loader must not be gated on the token: a shell that already had one used to
+// run without the behaviour switches, which is exactly when they matter.
+ok(SHIPPED_SCRIPTS.every((p) => {
+  const s = readFileSync(REPO + p, "utf8")
+  return s.includes("paul_load_env") && !s.includes('[ -z "${ATLASSIAN_API_TOKEN:-}" ] && [ -f "$PAUL_ENV" ]')
+}), "scripts load paul.env unconditionally, so PAUL_REORDER_APPLY is never silently ignored")
 
 // Install URLs must agree with each other — a repo that does not exist breaks the quick start.
 const urlSources = ["README.md", "package.json"].map((f) => readFileSync(REPO + f, "utf8")).join("\n")

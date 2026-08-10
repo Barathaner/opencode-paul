@@ -43,11 +43,26 @@ set -uo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROMPT_TEMPLATE="$REPO_DIR/prompts/init_from_docs.md"
 
-# Secrets + keys written by setup.sh, so you never have to `source` them first.
-# The environment wins when it already carries a token, and the --space/--project
-# flags are parsed further down, so both still override what is sourced here.
-PAUL_ENV="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/paul.env"
-[ -z "${ATLASSIAN_API_TOKEN:-}" ] && [ -f "$PAUL_ENV" ] && . "$PAUL_ENV"
+# Settings written by setup.sh, so no caller has to `source` them first.
+# Always read the file — gating this on the token being absent used to mean that
+# a shell which already had a token silently ran without the behaviour switches,
+# so PAUL_REORDER_APPLY and PAUL_PROTECTED_TERMS in paul.env were ignored exactly
+# when they mattered. Values already in the environment still win, so an explicit
+# override on the command line is never clobbered.
+paul_load_env() {
+  local f="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/paul.env" v
+  [ -f "$f" ] || return 0
+  local keep=""
+  for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
+           PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
+           PAUL_PROTECTED_TERMS PAUL_ROLES; do
+    [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
+  done
+  . "$f"
+  [ -n "$keep" ] && eval "export $keep"
+  return 0
+}
+paul_load_env
 
 # --- CONFIGURATION (env-overridable; defaults are the production values) ---
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin/opencode}"

@@ -117,6 +117,9 @@ by default. Add your own product and vendor names:
 PAUL_PROTECTED_TERMS="Carl Zeiss,ACME Payments,Iris" ./process_meetings.sh notes.json
 ```
 
+`setup.sh` asks for these and stores them in `~/.config/opencode/paul.env`, which every PAUL script
+reads — edit that file to change them later.
+
 `paul_roles` returns a `warnings` array when an alias is likely to cause this — three characters or
 fewer, lowercase (the scrub is case-sensitive and would miss the capitalised spelling), or colliding
 with a protected term. They are warnings, not rejections: a nickname that is also a common word may

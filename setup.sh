@@ -11,6 +11,11 @@
 #
 # Answers can be preset via env (interactive prompts are skipped for any that are set):
 #   JIRA_URL, JIRA_EMAIL, ATLASSIAN_API_TOKEN, JIRA_PROJECT, CONFLUENCE_SPACE
+#   PAUL_REWRITE_DESCRIPTIONS, PAUL_REORDER_APPLY, PAUL_PROTECTED_TERMS
+#
+# Every answer is written to ~/.config/opencode/paul.env, which is read back at the
+# start of the next run — so editing that file is a supported way to change your
+# mind, and re-running this script will not undo it.
 #
 # Setup finishes by offering to index your Confluence space + Jira project into
 # PAUL memory (read-only apart from PAUL's own AGENTSMEMORY page). Set
@@ -36,7 +41,7 @@ echo "${BOLD}=== PAUL setup ===${RST}"
 echo "${DIM}Config dir: $OPENCODE_DIR${RST}"
 
 # --- 1. prerequisites --------------------------------------------------------
-hdr "1/6  Checking prerequisites"
+hdr "1/7  Checking prerequisites"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -86,7 +91,7 @@ fi
 UVX_BIN="$(command -v uvx || echo "$HOME/.local/bin/uvx")"
 
 # --- 2. install PAUL (plugin path) ------------------------------------------
-hdr "2/6  Installing PAUL into OpenCode"
+hdr "2/7  Installing PAUL into OpenCode"
 mkdir -p "$OPENCODE_DIR"
 
 # Ensure the SDK is resolvable for local plugin loading.
@@ -103,7 +108,13 @@ cp "$REPO_DIR/tool/paul.ts" "$OPENCODE_DIR/tools/paul.ts"
 ok "installed tools/paul.ts (11 paul_* tools)"
 
 # --- 3. collect Atlassian credentials ---------------------------------------
-hdr "3/6  Atlassian connection"
+hdr "3/7  Atlassian connection"
+
+# Load whatever a previous setup wrote. Every ask* helper skips a variable that is
+# already set, so answers — including ones edited into paul.env by hand — survive
+# re-running this script. Without it, "just change it in paul.env" would be untrue:
+# the file is rewritten wholesale further down.
+[ -f "$SECRETS" ] && . "$SECRETS"
 echo "${DIM}PAUL syncs meetings→Confluence and action items→Jira. Get an API token at:${RST}"
 echo "${DIM}  https://id.atlassian.com/manage-profile/security/api-tokens${RST}"
 
@@ -139,6 +150,21 @@ ask_secret() {
   drain_stdin
   printf "   %s: " "$prompt"; read -rs reply; echo; eval "$var=\"$reply\""
 }
+ask_toggle() { # ask_toggle VAR "prompt" "default 0|1"  -> stores 0 or 1
+  local var="$1" prompt="$2" def="${3:-0}" cur="${!1:-}" reply
+  # "0" is a real answer, so only an UNSET variable counts as unanswered.
+  if [ -n "$cur" ]; then eval "$var=\$cur"; return; fi
+  if [ "$NONINTERACTIVE" = "1" ]; then eval "$var=\$def"; return; fi
+  local hint="[y/N]"; [ "$def" = "1" ] && hint="[Y/n]"
+  drain_stdin
+  printf "   %s ${DIM}%s${RST} " "$prompt" "$hint"; read -r reply
+  case "$reply" in
+    [Yy]*) eval "$var=1" ;;
+    [Nn]*) eval "$var=0" ;;
+    *)     eval "$var=\$def" ;;
+  esac
+}
+
 ask_key() { # ask_key VAR "prompt" "default" "regex" "what it is" [upper]
   local var="$1" prompt="$2" def="$3" re="$4" what="$5" upper="${6:-}" cur="${!1:-}" reply v tries=0
   while :; do
@@ -174,7 +200,7 @@ CONFLUENCE_URL="$JIRA_URL/wiki"
   || die "JIRA_URL, JIRA_EMAIL and ATLASSIAN_API_TOKEN are required."
 
 # --- 4. validate credentials + the project and space actually exist ----------
-hdr "4/6  Validating connection"
+hdr "4/7  Validating connection"
 
 # GET a URL with the collected credentials; echoes the HTTP status, body in $2.
 api_code() {
@@ -227,8 +253,30 @@ check_exists CONFLUENCE_SPACE "$CONFLUENCE_URL/rest/api/space/%s" "Confluence sp
 
 rm -f "$RESP"; trap - EXIT
 
-# --- 5. write config + secrets ----------------------------------------------
-hdr "5/6  Writing OpenCode config"
+# --- 5. how much is PAUL allowed to change? ----------------------------------
+# Both defaults are "no". On a project other people already run, the Jira
+# descriptions and the board order are someone's work, and PAUL should not
+# replace either as a side effect of processing a meeting transcript.
+hdr "5/7  What may PAUL change?"
+echo "${DIM}Both default to no. You can change any answer later in $SECRETS.${RST}"
+
+echo "${DIM}   Existing tickets: PAUL always creates NEW tickets for new action items. This is"
+echo "   about tickets that already exist — their description was written by a person.${RST}"
+ask_toggle PAUL_REWRITE_DESCRIPTIONS \
+  "Let PAUL rewrite the description of an existing Jira ticket?" 0
+
+echo "${DIM}   Board order: PAUL ranks tickets by its own priority order. Answering no still"
+echo "   prints the order it would apply, so you can look before letting it act.${RST}"
+ask_toggle PAUL_REORDER_APPLY \
+  "Let PAUL re-rank the $JIRA_PROJECT board to match that order?" 0
+
+echo "${DIM}   Names become roles, so a first name that is also a product name gets rewritten:"
+echo "   with a 'Paul' on the team, 'Paul memory' would become 'Full-stack Developer memory'."
+echo "   List product/vendor names to protect (comma-separated), or leave empty.${RST}"
+ask PAUL_PROTECTED_TERMS "Protected terms" ""
+
+# --- 6. write config + secrets ----------------------------------------------
+hdr "6/7  Writing OpenCode config"
 
 # 5a. secrets file (chmod 600) — the token never goes into opencode.json.
 umask 077
@@ -240,6 +288,24 @@ export PAUL_JIRA_URL="$JIRA_URL"
 export PAUL_JIRA_EMAIL="$JIRA_EMAIL"
 export PAUL_JIRA_PROJECT="$JIRA_PROJECT"
 export PAUL_CONFLUENCE_SPACE="$CONFLUENCE_SPACE"
+
+# --- Behaviour switches -------------------------------------------------------
+# EDIT THESE HERE. Every PAUL script reads this file, and re-running setup.sh
+# keeps whatever you set, so this is the place to change your mind.
+#
+# 1 = let the meeting pipeline replace an EXISTING Jira ticket's description with
+#     a freshly rendered one. 0 = leave other people's descriptions alone.
+#     (New tickets are always created either way.)
+export PAUL_REWRITE_DESCRIPTIONS="${PAUL_REWRITE_DESCRIPTIONS:-0}"
+#
+# 1 = actually re-rank the Jira board to PAUL's priority order.
+# 0 = print the order it would apply and change nothing.
+export PAUL_REORDER_APPLY="${PAUL_REORDER_APPLY:-0}"
+#
+# Comma-separated product/vendor names the name-scrub must never rewrite, for when
+# a teammate's name is also a product name (e.g. "Carl Zeiss,ACME Payments").
+# PAUL, AGENTSMEMORY, OpenCode, Confluence, Jira and Atlassian are always protected.
+export PAUL_PROTECTED_TERMS="$PAUL_PROTECTED_TERMS"
 ENV
 chmod 600 "$SECRETS"
 umask 022
@@ -309,7 +375,7 @@ if [ -n "$RC" ]; then
 fi
 
 # --- 6. verify ---------------------------------------------------------------
-hdr "6/6  Verifying install"
+hdr "7/7  Verifying install"
 
 # The harness imports @opencode-ai/plugin. That SDK ships inside OpenCode, so it is
 # a PEER dependency — and npm never installs a root package's peers. A fresh clone
@@ -391,6 +457,8 @@ echo "       ${CYN}$REPO_DIR/process_meetings.sh $REPO_DIR/examples/sample-trans
 echo "  3. Or just open OpenCode in any project and ask it to use the paul_* tools."
 echo
 echo "${DIM}The scripts load $SECRETS themselves — no 'source' needed.${RST}"
+echo "${DIM}Behaviour: edit $SECRETS to change what PAUL may rewrite or re-rank —${RST}"
+echo "${DIM}           re-running setup.sh keeps whatever you set there.${RST}"
 echo "${DIM}Secrets:   $SECRETS (chmod 600, git-ignored)${RST}"
 echo "${DIM}Config:    $CONFIG${RST}"
 echo "${DIM}Tools:     $OPENCODE_DIR/tools/paul.ts${RST}"

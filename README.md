@@ -35,9 +35,15 @@ cd opencode-paul
 6. Append the PAUL behavior block to your `AGENTS.md`, install the `/paul-init-docs` command,
    install the checkout's test dependencies, run the test harness, and confirm `mcp-atlassian`
    starts (which also warms the `uvx` cache, so your first OpenCode run does not stall).
-7. Offer to **index your existing Confluence space and Jira project into PAUL memory** — read-only
+7. Ask **what PAUL may change** on a project other people already run — may it rewrite an existing
+   Jira ticket's description, may it re-rank your board, and which product names the name-scrub must
+   never touch. Both permissions default to *no*.
+8. Offer to **index your existing Confluence space and Jira project into PAUL memory** — read-only
    apart from PAUL's own mirror page. Say yes and PAUL already knows your project when you open
    OpenCode.
+
+Every answer lands in `~/.config/opencode/paul.env`, which every PAUL script reads. **That file is
+where to change your mind** — re-running `setup.sh` keeps whatever you set there.
 
 That is the whole setup. There is no `source` step: every script loads
 `~/.config/opencode/paul.env` itself. To try the meeting pipeline on the bundled sample:
@@ -320,6 +326,10 @@ All paths and keys are environment-overridable (defaults in parentheses):
 | `PAUL_PROTECTED_TERMS` | built-in list | comma-separated terms the name scrub must never rewrite |
 | `PAUL_REWRITE_DESCRIPTIONS` | `0` | `1` lets the pipeline replace an existing Jira description with a re-rendered one |
 | `PAUL_REORDER_APPLY` | `0` | `1` actually re-ranks the board; otherwise the reorder is a preview |
+
+The last three are asked during `setup.sh` and stored in `~/.config/opencode/paul.env`; edit that
+file to change them at any time. The scripts read it themselves, and values already exported in your
+shell still win over it.
 
 **Board reorder** (`scripts/reorder_board.sh`, called automatically in step 7, also runnable
 standalone) needs Jira REST credentials — reuse your Atlassian ones:

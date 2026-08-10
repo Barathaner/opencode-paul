@@ -19,9 +19,9 @@ alternate space/project key can be passed as arguments). The command bakes in yo
 key at install time — after changing either, regenerate it with `./scripts/install_command.sh`,
 which renders the same prompt into `~/.config/opencode/command/paul-init-docs.md`.
 
-No `source` step is needed: the script loads `~/.config/opencode/paul.env` itself when the
-environment does not already carry `ATLASSIAN_API_TOKEN`, so cron jobs and fresh shells work
-unchanged. `setup.sh` also offers to run this for you as its final step.
+No `source` step is needed: the script loads `~/.config/opencode/paul.env` itself, so cron jobs and
+fresh shells work unchanged. Anything already exported in your shell still wins over the file.
+`setup.sh` also offers to run this for you as its final step.
 
 ## What it reads
 
@@ -141,6 +141,8 @@ The script reads the same environment as `process_meetings.sh`, all of it writte
 | `PAUL_PROJECT_DIR` | `~/opencode_automations/paul-project` | project root holding `.paul/memory.json` |
 | `PAUL_LOG_DIR` | `~/opencode_automations/logs` | where the run log goes |
 | `PAUL_ROLES` | built-in list | role vocabulary — see [ROLES.md](./ROLES.md) |
+| `PAUL_PROTECTED_TERMS` | built-in list | names the scrub must never rewrite (asked at setup) |
+| `PAUL_REORDER_APPLY` | `0` | board reorder is a preview unless this is `1` (asked at setup) |
 | `OPENCODE_BIN` | `~/.opencode/bin/opencode` | the OpenCode binary |
 
 `PAUL_PROJECT_DIR` is git-initialised on first run so OpenCode's `ctx.worktree` resolves to the same
