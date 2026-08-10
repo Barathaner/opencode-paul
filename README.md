@@ -8,6 +8,9 @@ Instead of letting the agent scribble roadmap notes into prose (which drift and 
 PAUL gives it real verbs backed by an atomic per-project JSON store at
 `<project-root>/.paul/memory.json` — git-trackable, cross-session, no database.
 
+See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the problem this solves, a component
+diagram of the data flow, and a sequence diagram for each of the two pipelines below.
+
 ## Quick start
 
 One script installs everything, asks for your Atlassian details, checks them, and wires
@@ -271,6 +274,10 @@ meeting before PAUL knows anything. This entrypoint has the agent **read** what 
 the documentation trees you picked, down to their leaves, plus the issues your boards show —
 summarize it, and write what it learned into PAUL memory:
 
+See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md#sequence-diagram--scriptsinit_from_docssh)
+for the phase-by-phase sequence diagram.
+
+
 **Both halves are scoped, because a whole space is usually far more than the documentation that
 matters and the index pays per page.** Boards narrow the Jira side through their saved filters
 (`project = "VXF" AND (filter = 101 OR filter = 103)`), so it follows the board rather than a JQL
@@ -333,6 +340,9 @@ mutates stored entries, and passing nothing is fine too.
 This is what PAUL was built for. `process_meetings.sh` takes a Whisper-style JSON
 transcript and drives OpenCode to turn it into Confluence notes + Jira tasks — but with
 PAUL as the **memory layer** so runs are *stateful* instead of blind:
+
+See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md#sequence-diagram--process_meetingssh)
+for the phase-by-phase sequence diagram.
 
 ```bash
 ./process_meetings.sh /path/to/transcript.json

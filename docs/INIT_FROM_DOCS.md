@@ -6,6 +6,8 @@ PAUL to catch up — it can read what exists and learn from that.
 
 This is what `scripts/init_from_docs.sh` and the `/paul-init-docs` command do. Both drive the
 same protocol, which lives in one file: [`prompts/init_from_docs.md`](../prompts/init_from_docs.md).
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md#sequence-diagram--scriptsinit_from_docssh) for a
+phase-by-phase sequence diagram of this run.
 
 ```bash
 ./scripts/init_from_docs.sh                 # incremental index — safe to repeat

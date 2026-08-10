@@ -7,7 +7,9 @@ described only in a prompt drifts with every model and every run, so the format 
 render through it rather than hand-writing a description.
 
 A ticket, an action item and a PAUL entry are the same object at three stages, so they share one
-spec: extracted from a transcript → created in Jira → tracked in `.paul/memory.json`.
+spec: extracted from a transcript → created in Jira → tracked in `.paul/memory.json`. See
+[`ARCHITECTURE.md`](./ARCHITECTURE.md#sequence-diagram--process_meetingssh) for where ticket
+creation sits in the meeting pipeline's overall sequence.
 
 ## What it looks like
 
@@ -116,7 +118,7 @@ paul_ticket_body(spec)  ->  { description, missing, spec }
   assignment — the attributes live in the header line, which avoids project-specific field-scheme
   errors.
 
-`meta.spec.specVersion` records the format version (currently `1`), so entries written under an
+`meta.spec.specVersion` records the format version (currently `2`), so entries written under an
 older format stay detectable.
 
 ## Changing the format
