@@ -22,7 +22,7 @@ cd opencode-paul
 `setup.sh` will:
 
 1. Check/install prerequisites (`jq`, `curl`, Node, `opencode`, `uvx`).
-2. Install PAUL's nine tools into `~/.config/opencode/tools/`.
+2. Install PAUL's ten tools into `~/.config/opencode/tools/`.
 3. Ask for your **Atlassian base URL, email, API token**, Jira project key and Confluence
    space (get a token at
    [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)).
@@ -46,7 +46,7 @@ NONINTERACTIVE=1 JIRA_URL=https://you.atlassian.net JIRA_EMAIL=you@example.com \
 ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN ./setup.sh
 ```
 
-## What you get — nine tools
+## What you get — ten tools
 
 | Tool | Purpose |
 |------|---------|
@@ -55,10 +55,57 @@ ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN ./setup.sh
 | `paul_update` | Change an entry by id — move status, re-order the board, merge `meta`. |
 | `paul_remove` | Delete an entry by id. |
 | `paul_cursor` | Get/set the single "where are we now" pointer (phase/sprint + note). |
+| `paul_ticket_body` | Render a ticket/action item/task into the [standard format](./docs/TICKET_FORMAT.md) and report missing fields. |
 | `paul_init` | Seed the store from Atlassian (Jira tickets + Confluence meeting summaries), deduped by `externalId`. |
 | `paul_remote` | Get/set the pointer to the Confluence **AGENTSMEMORY** mirror page. |
 | `paul_export_page` | Render memory as a Confluence storage-format body (human summary + hidden lossless JSON block). |
 | `paul_import_page` | Merge an AGENTSMEMORY page back into local memory (newer `updatedAt` wins). |
+
+## The ticket format
+
+Tickets, action items and tasks all use one standard shape — because a format that lives only in a
+prompt drifts with every model and every run. It lives in code instead: the agent decides the
+content, `paul_ticket_body` renders the layout, and the agent passes that output to Jira verbatim.
+
+```markdown
+Complexity: Medium | Priority: High | Estimate: 1d
+
+## Context
+Login breaks for SSO users since the Okta migration.
+
+## Goal
+SSO users log in through Okta without the password fallback.
+
+## Proposed approach
+1. Reproduce the 500 on the Okta callback (sandbox tenant).
+2. Fix state/nonce handling in the Okta callback handler.
+3. Remove the password-fallback branch from /login.
+
+_Approach proposed by PAUL from the transcript — confirm before starting._
+
+## Acceptance criteria
+- [ ] Okta callback returns a valid session
+- [ ] Password fallback removed from /login
+
+## Out of scope
+SCIM user provisioning.
+
+## Dependencies
+KAN-12
+
+## Source
+Meeting Notes: 2026-08-10 (<confluence url>)
+```
+
+Meetings state *what*, rarely *how* — so when the approach or the acceptance criteria are missing,
+the agent works the task out and writes the plan it would follow itself, then marks those sections
+as proposed so a reader can tell a decision from a suggestion. A field that is genuinely unknown
+renders as `_Needs clarification_` instead of being invented. There is no owner field: PAUL never
+assigns tickets.
+
+The structured spec is stored in each entry's `meta.spec`, so any later run can re-render an
+identical description without the original transcript. Full reference:
+[`docs/TICKET_FORMAT.md`](./docs/TICKET_FORMAT.md).
 
 ## Manual install (advanced)
 
@@ -104,7 +151,8 @@ tools `paul_list`, `paul_add`, … automatically.
 
 Append [`AGENTS.snippet.md`](./AGENTS.snippet.md) into your `~/.config/opencode/AGENTS.md`
 (or a project `AGENTS.md`). It documents the workflow — pull state at the start of PAUL
-work, keep statuses truthful, and the Jira/Confluence init + sync recipes.
+work, keep statuses truthful, the standard ticket format, and the Jira/Confluence init +
+sync recipes.
 
 ## Atlassian sync (optional)
 
@@ -153,14 +201,19 @@ What each run does, in order:
    `paul_list` / `paul_cursor`, so the agent knows every prior meeting, existing ticket,
    and the current roadmap phase.
 2. **Meeting notes** — creates a `Meeting Notes: <date>` Confluence page in your space.
-3. **Action items → Jira, deduped** — extracts action items and only creates *new* Jira
-   tasks; ones PAUL already tracks are reused instead of duplicated. (Without PAUL, the old
-   script re-created the same tickets on every run.)
+3. **Action items → Jira, standard format, deduped** — extracts action items, builds a
+   ticket spec for each (context, goal, a numbered approach, acceptance criteria, complexity,
+   priority, estimate), renders it through `paul_ticket_body` and sends that body to Jira
+   verbatim. Only *new* tickets are created; ones PAUL already tracks are reused and their
+   description re-rendered, so older free-form tickets converge on the format. (Without PAUL,
+   the old script re-created the same tickets on every run.) Only summary + description are
+   sent — no priority field, no timetracking, no labels, no assignment — which avoids
+   project-specific field-scheme errors. See [the ticket format](#the-ticket-format).
 4. **Record into PAUL** — `paul_init` writes the meeting summary + tickets into the store.
-   Each action item is enriched with **Complexity** (Low/Medium/High), **Priority**
-   (Low/Medium/High/Critical) and a **Time estimate** — written to real Jira fields
-   (`priority`, `timetracking.originalEstimate`, a `complexity-*` label) and carried in
-   PAUL `meta`. The agent assigns each ticket a PAUL `order` from those attributes.
+   **Complexity** (Low/Medium/High), **Priority** (Low/Medium/High/Critical) and the
+   **Time estimate** are carried in PAUL `meta`, and the full spec in `meta.spec` so the
+   description can be re-rendered later without the transcript. The agent assigns each
+   ticket a PAUL `order` from those attributes.
 5. **Push memory** — exports and updates the `AGENTSMEMORY` page, so the next run — or a
    teammate on another machine — starts from this meeting's state.
 6. **Reorder the Jira board** — `scripts/reorder_board.sh` ranks the board to match PAUL's
@@ -231,7 +284,8 @@ drift). Run the harness (no OpenCode agent loop / model endpoint required):
 npm test          # node --experimental-strip-types scripts/verify.mjs
 ```
 
-It exercises all nine tools plus the plugin registration against throwaway stores — 23 checks.
+It exercises all ten tools plus the plugin registration and the ticket renderer against
+throwaway stores.
 
 ## Notes & gotchas
 

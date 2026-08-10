@@ -6,7 +6,8 @@
  *
  * Store location: <project-root>/.paul/memory.json  (git-trackable, per project)
  * Tools exposed:  paul_list, paul_add, paul_update, paul_remove, paul_cursor,
- *                 paul_init, paul_remote, paul_export_page, paul_import_page
+ *                 paul_ticket_body, paul_init, paul_remote, paul_export_page,
+ *                 paul_import_page
  */
 import { tool } from "@opencode-ai/plugin"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs"
@@ -24,6 +25,30 @@ type Entry = {
   meta?: Record<string, unknown>  // freeform: jira key, assignee, sprint, links...
   createdAt: string
   updatedAt: string
+}
+
+/**
+ * The standard shape of a ticket / action item / task.
+ *
+ * One spec covers all three stages of the same object: the action item extracted
+ * from a meeting, the Jira issue created from it, and the PAUL entry that tracks
+ * it. It is rendered to a Jira description by `renderTicketDescription` and
+ * persisted in an entry's `meta.spec`, so the structured form survives the
+ * round-trip through Confluence and is never re-derived from prose.
+ */
+type TicketSpec = {
+  complexity?: string          // Low | Medium | High
+  priority?: string            // Low | Medium | High | Critical
+  timeEstimate?: string        // Jira-style, e.g. 2h, 1d, 3d
+  context?: string             // why this exists — facts from the meeting
+  goal?: string                // one sentence definition of done
+  approach?: string[]          // numbered plan; derived when the meeting did not state it
+  acceptanceCriteria?: string[]// rendered as checkboxes
+  outOfScope?: string          // optional guard against scope drift
+  dependencies?: string[]      // optional; Jira keys or free text
+  source?: string              // meeting page title + url
+  derived?: string[]           // which fields PAUL proposed rather than took from the meeting
+  specVersion?: number
 }
 
 type Store = {
@@ -199,6 +224,156 @@ export const cursor = tool({
   },
 })
 
+// ---- Standard ticket format --------------------------------------------------
+// The shape of a ticket lives here, in code, not in a prompt. The agent decides
+// the content; this renderer decides the layout, so every ticket PAUL produces
+// looks the same and carries enough context for someone else to pick it up.
+
+const TICKET_FORMAT_VERSION = 1
+
+const REQUIRED_SPEC_FIELDS = [
+  "complexity", "priority", "timeEstimate",
+  "context", "goal", "approach", "acceptanceCriteria", "source",
+] as const
+
+const NEEDS_CLARIFICATION = "_Needs clarification — not stated in the meeting._"
+const UNSET = "—"
+
+function isBlank(v: unknown): boolean {
+  if (v === undefined || v === null) return true
+  if (typeof v === "string") return v.trim() === ""
+  if (Array.isArray(v)) return v.filter((x) => String(x ?? "").trim() !== "").length === 0
+  return false
+}
+
+/** Names of the required spec fields that are still empty. */
+function validateSpec(spec: TicketSpec): string[] {
+  return REQUIRED_SPEC_FIELDS.filter((f) => isBlank(spec[f])).map(String)
+}
+
+/** Non-empty entries of a list, trimmed. */
+function items(list: string[] | undefined): string[] {
+  return (list || []).map((s) => String(s ?? "").trim()).filter(Boolean)
+}
+
+function derivedNote(what: string): string {
+  return `_${what} proposed by PAUL from the transcript — confirm before starting._`
+}
+
+/**
+ * Render a TicketSpec as a Jira description in Markdown (mcp-atlassian converts
+ * Markdown to ADF for Jira Cloud). Deterministic: same spec in, same body out.
+ * Optional sections are omitted entirely when empty; required ones that are empty
+ * render a visible "needs clarification" marker rather than being invented.
+ */
+function renderTicketDescription(spec: TicketSpec): string {
+  const derived = items(spec.derived)
+  const out: string[] = []
+
+  out.push(
+    `Complexity: ${spec.complexity?.trim() || UNSET}` +
+    ` | Priority: ${spec.priority?.trim() || UNSET}` +
+    ` | Estimate: ${spec.timeEstimate?.trim() || UNSET}`,
+  )
+
+  out.push("", "## Context", spec.context?.trim() || NEEDS_CLARIFICATION)
+  out.push("", "## Goal", spec.goal?.trim() || NEEDS_CLARIFICATION)
+
+  out.push("", "## Proposed approach")
+  const steps = items(spec.approach)
+  if (steps.length) {
+    steps.forEach((s, i) => out.push(`${i + 1}. ${s}`))
+    if (derived.includes("approach")) out.push("", derivedNote("Approach"))
+  } else {
+    out.push(NEEDS_CLARIFICATION)
+  }
+
+  out.push("", "## Acceptance criteria")
+  const criteria = items(spec.acceptanceCriteria)
+  if (criteria.length) {
+    for (const c of criteria) out.push(`- [ ] ${c}`)
+    if (derived.includes("acceptanceCriteria")) out.push("", derivedNote("Acceptance criteria"))
+  } else {
+    out.push(NEEDS_CLARIFICATION)
+  }
+
+  if (!isBlank(spec.outOfScope)) out.push("", "## Out of scope", spec.outOfScope!.trim())
+
+  const deps = items(spec.dependencies)
+  if (deps.length) out.push("", "## Dependencies", deps.join(", "))
+
+  out.push("", "## Source", spec.source?.trim() || NEEDS_CLARIFICATION)
+
+  return out.join("\n") + "\n"
+}
+
+/** Collect the spec fields out of a looser arg/ticket object, dropping empties. */
+function specFrom(src: Record<string, unknown>): TicketSpec | undefined {
+  const spec: Record<string, unknown> = {}
+  for (const k of ["complexity", "priority", "timeEstimate", "context", "goal", "approach",
+                   "acceptanceCriteria", "outOfScope", "dependencies", "source", "derived"]) {
+    if (!isBlank(src[k])) spec[k] = src[k]
+  }
+  if (!Object.keys(spec).length) return undefined
+  return { ...spec, specVersion: TICKET_FORMAT_VERSION } as TicketSpec
+}
+
+const SPEC_ARGS = {
+  complexity: S.string().optional().describe("Implementation effort/uncertainty: Low | Medium | High"),
+  priority: S.string().optional().describe("Business urgency: Low | Medium | High | Critical"),
+  timeEstimate: S.string().optional().describe("Effort estimate, e.g. 2h, 1d, 3d"),
+  context: S.string().optional().describe("Why this exists — background and facts from the meeting"),
+  goal: S.string().optional().describe("One sentence describing what 'done' means"),
+  approach: S.array(S.string()).optional().describe(
+    "Numbered plan: the concrete steps to solve this. Derive these from the task itself when the " +
+    "meeting did not state them, and list 'approach' in derived[]."),
+  acceptanceCriteria: S.array(S.string()).optional().describe(
+    "Checkable outcomes, rendered as checkboxes. Derive when not stated and list in derived[]."),
+  outOfScope: S.string().optional().describe("Optional: what this ticket explicitly does NOT cover"),
+  dependencies: S.array(S.string()).optional().describe("Optional: blocking Jira keys or prerequisites"),
+  source: S.string().optional().describe("Where this came from, e.g. 'Meeting Notes: 2026-08-10 (<url>)'"),
+  derived: S.array(S.string()).optional().describe(
+    "Field names PAUL proposed rather than took from the meeting, e.g. ['approach']. " +
+    "These get a visible 'proposed — confirm before starting' note in the body."),
+}
+
+export const ticket_body = tool({
+  description:
+    "Render a ticket / action item / task into PAUL's STANDARD Jira description format (Markdown) and " +
+    "report which required fields are still missing. Call this for EVERY Jira issue you create or update " +
+    "and pass the returned 'description' VERBATIM to jira create_issue / update_issue — never hand-write " +
+    "a description, so every ticket has the same shape. Required: complexity, priority, timeEstimate, " +
+    "context, goal, approach, acceptanceCriteria, source. If the meeting did not state the approach or the " +
+    "acceptance criteria, think the task through and DERIVE them (a numbered plan someone could follow), " +
+    "then list what you derived in derived[] so the body marks it as proposed. Pass entryId to also store " +
+    "the structured spec on that PAUL entry's meta.spec.",
+  args: {
+    ...SPEC_ARGS,
+    title: S.string().optional().describe("Ticket summary; not part of the body, stored with the spec"),
+    entryId: S.string().optional().describe("PAUL entry id to persist this spec onto (meta.spec)"),
+  },
+  async execute(args, ctx) {
+    const spec = specFrom(args as Record<string, unknown>) || { specVersion: TICKET_FORMAT_VERSION }
+    const description = renderTicketDescription(spec)
+    const missing = validateSpec(spec)
+
+    let persisted: string | undefined
+    if (args.entryId) {
+      const path = storePath(ctx as any)
+      const store = load(path)
+      const e = store.entries.find((x) => x.id === args.entryId)
+      if (!e) return JSON.stringify({ error: `No entry with id ${args.entryId}`, description, missing })
+      e.meta = { ...(e.meta || {}), spec: { ...((e.meta?.spec as TicketSpec) || {}), ...spec } }
+      if (args.title) e.title = args.title
+      e.updatedAt = new Date().toISOString()
+      save(path, store)
+      persisted = e.id
+    }
+
+    return JSON.stringify({ description, missing, spec, persisted }, null, 2)
+  },
+})
+
 export const init = tool({
   description:
     "Initialize/index PAUL project memory from Atlassian (Confluence docs + Jira tickets). " +
@@ -227,10 +402,11 @@ export const init = tool({
       details: S.string().optional().describe("Short description / context"),
       issueType: S.string().optional().describe("Jira issue type, e.g. Task, Story, Epic, Bug"),
       url: S.string().optional().describe("Link to the Jira issue"),
-      complexity: S.string().optional().describe("Estimated complexity: Low|Medium|High"),
-      priority: S.string().optional().describe("Business priority: Low|Medium|High|Critical"),
-      timeEstimate: S.string().optional().describe("Effort estimate, e.g. 2h, 1d, 3d"),
-    })).optional().describe("Jira tickets to store as roadmap/board entries"),
+      ...SPEC_ARGS,
+    })).optional().describe(
+      "Jira tickets to store as roadmap/board entries. Pass the standard ticket-format fields " +
+      "(context/goal/approach/acceptanceCriteria/... — see paul_ticket_body) so the structured spec " +
+      "is stored in meta.spec and the body can be re-rendered identically later."),
   },
   async execute(args, ctx) {
     const path = storePath(ctx as any)
@@ -257,10 +433,17 @@ export const init = tool({
       const existing = byExt.get(fields.externalId)
       if (existing) {
         const { meta: fMeta, ...fRest } = fields
-        Object.assign(existing, clean(fRest as Record<string, unknown>), {
-          meta: { ...(existing.meta || {}), ...clean((fMeta || {}) as Record<string, unknown>), externalId: fields.externalId },
-          updatedAt: now,
-        })
+        const mergedMeta: Record<string, unknown> = {
+          ...(existing.meta || {}),
+          ...clean((fMeta || {}) as Record<string, unknown>),
+          externalId: fields.externalId,
+        }
+        // meta is merged shallowly, which would let a partial re-init replace a
+        // whole stored spec. Merge the spec field by field instead.
+        const oldSpec = existing.meta?.spec as Record<string, unknown> | undefined
+        const newSpec = (fMeta as Record<string, unknown> | undefined)?.spec as Record<string, unknown> | undefined
+        if (oldSpec && newSpec) mergedMeta.spec = { ...oldSpec, ...clean(newSpec) }
+        Object.assign(existing, clean(fRest as Record<string, unknown>), { meta: mergedMeta, updatedAt: now })
         return { action: "updated", id: existing.id }
       }
       const entry: Entry = {
@@ -312,6 +495,7 @@ export const init = tool({
           complexity: t.complexity,
           priority: t.priority,
           timeEstimate: t.timeEstimate,
+          spec: specFrom(t as Record<string, unknown>),
         },
       })
       result.tickets[r.action as "added" | "updated"]++
@@ -361,7 +545,11 @@ function renderPageBody(store: Store): string {
     html += `<h3>${esc(st)} (${list.length})</h3><ul>`
     for (const e of list.sort((a, b) => a.order - b.order)) {
       const ext = (e.meta as any)?.externalId
-      html += `<li>${ext ? `<strong>${esc(ext)}</strong> — ` : ""}${esc(e.title)}</li>`
+      // Flag tickets whose standard-format spec is missing or incomplete, so the
+      // mirror shows at a glance which ones nobody could pick up and solve.
+      const gaps = validateSpec(((e.meta as any)?.spec as TicketSpec) || {})
+      const flag = gaps.length ? ` <em>— needs detail (${esc(gaps.join(", "))})</em>` : ""
+      html += `<li>${ext ? `<strong>${esc(ext)}</strong> — ` : ""}${esc(e.title)}${flag}</li>`
     }
     html += `</ul>`
   }

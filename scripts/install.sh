@@ -2,7 +2,7 @@
 # install.sh — drop-in install of PAUL as an OpenCode custom tool (no npm).
 #
 # Copies the self-contained tool file into your global OpenCode tools dir so
-# the nine paul_* tools are available in every project. For the plugin install
+# the ten paul_* tools are available in every project. For the plugin install
 # path (one line in opencode.json) see the README instead.
 set -euo pipefail
 

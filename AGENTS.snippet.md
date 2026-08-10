@@ -13,7 +13,40 @@ and persists across sessions automatically.
 - `paul_update` — change an entry by id (move status, re-order the board, attach meta).
 - `paul_remove` — delete an entry by id.
 - `paul_cursor` — get/set the single "where are we now" roadmap pointer (phase/sprint + note).
+- `paul_ticket_body` — render a ticket/action item/task into the STANDARD Jira description format.
 - `paul_init`   — index/initialize the store from Atlassian (Confluence docs + Jira tickets).
+
+## Ticket format (tickets, action items, tasks)
+
+Every ticket has the same shape. You decide the content; `paul_ticket_body` decides the layout.
+**Never hand-write a Jira description** — build the spec, call `paul_ticket_body`, and pass the
+returned `description` verbatim to `jira create_issue` / `jira update_issue`.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `complexity` | yes | Low \| Medium \| High — effort/uncertainty |
+| `priority` | yes | Low \| Medium \| High \| Critical — business urgency |
+| `timeEstimate` | yes | Jira-style, e.g. 2h, 1d, 3d |
+| `context` | yes | why this exists — background/facts from the meeting |
+| `goal` | yes | one sentence: what "done" means |
+| `approach` | yes | numbered plan, one bounded action per step |
+| `acceptanceCriteria` | yes | 2–5 checkable outcomes, rendered as checkboxes |
+| `outOfScope` | no | what this ticket explicitly does not cover |
+| `dependencies` | no | blocking Jira keys or prerequisites |
+| `source` | yes | where it came from, e.g. `Meeting Notes: 2026-08-10 (<url>)` |
+| `derived` | no | field names YOU worked out rather than took from the source |
+
+DERIVE, DON'T BLANK: meetings rarely state the approach or the acceptance criteria. Think the task
+through and write the plan you would follow yourself, then name those fields in `derived[]` so the
+body marks them as proposed rather than decided. Invent the *how*; never invent decisions, owners
+or deadlines. If `paul_ticket_body` returns a non-empty `missing`, fill those fields and call again.
+
+PAUL never assigns tickets — there is no owner field, and you should not call `jira assign_issue`.
+Send only summary + description to Jira; the attributes live in the rendered header line.
+
+Persist the same spec fields through `paul_init`'s `tickets[]` (or pass `entryId` to
+`paul_ticket_body`) so they land in `meta.spec` and the description can be re-rendered later
+without the original transcript.
 
 ## Initializing memory from Atlassian (paul_init)
 When asked to "init/index the project from Atlassian" (or on first setup), do this:

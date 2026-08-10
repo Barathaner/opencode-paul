@@ -7,8 +7,9 @@
 #   1. Pull the shared PAUL memory (AGENTSMEMORY Confluence page) so the run is
 #      STATEFUL — it knows every prior meeting, ticket, and the roadmap cursor.
 #   2. Create a per-meeting Confluence notes page.
-#   3. Turn action items into Jira tasks — WITHOUT duplicating ones PAUL already
-#      tracks.
+#   3. Turn action items into Jira tasks in PAUL's standard ticket format (rendered
+#      by paul_ticket_body, not free-form by the model) — WITHOUT duplicating ones
+#      PAUL already tracks.
 #   4. Record the meeting + new tickets back into PAUL and push the updated
 #      AGENTSMEMORY page, so the next meeting (or teammate) sees this one.
 #
@@ -109,7 +110,8 @@ log "Invoking OpenCode CLI ($OPENCODE_BIN) with PAUL memory integration..."
 read -r -d '' PROMPT <<EOF
 You are an AI project manager assistant with PAUL structured memory. PAUL is your
 per-project memory (tools: paul_list, paul_add, paul_update, paul_remove,
-paul_cursor, paul_init, paul_remote, paul_export_page, paul_import_page). Work
+paul_cursor, paul_ticket_body, paul_init, paul_remote, paul_export_page,
+paul_import_page). Work
 through these phases IN ORDER and use the mcp-atlassian tools for all Confluence/Jira I/O.
 
 PHASE 0 — LOAD MEMORY (pull first, before doing anything else):
@@ -123,29 +125,50 @@ PHASE 0 — LOAD MEMORY (pull first, before doing anything else):
 
 PHASE 1 — MEETING NOTES PAGE:
 - Create a Confluence page in space "$CONFLUENCE_SPACE" titled "Meeting Notes: $MEETING_DATE"
-  containing: an overview, the key decisions, extracted action items, and the
-  formatted transcript. Remember the returned pageId.
+  containing: an overview, the key decisions, the extracted action items, and the
+  formatted transcript. Remember the returned pageId and page URL.
+- List each action item with the SAME fields you will put on its ticket in PHASE 2, so
+  the page and the board agree: Title, Goal (one sentence), and the line
+  "Complexity: <C> | Priority: <P> | Estimate: <T>".
 
-PHASE 2 — ACTION ITEMS -> JIRA (enriched + deduped against PAUL):
+PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PAUL):
 - Extract every action item from the transcript.
-- For EACH action item, estimate these three attributes (use your judgement from
-  the transcript context; always include all three):
-  * Complexity: one of Low | Medium | High (implementation effort / uncertainty).
-  * Priority:   one of Low | Medium | High | Critical (business urgency).
-  * Time:       a Jira-style estimate string, e.g. "2h", "1d", "3d" (expected effort).
-- For each action item, check the paul_list results from PHASE 0. If an equivalent
-  ticket already exists (same intent / matching title or meta.externalId), do NOT
-  create a duplicate — reuse the existing Jira key and update it (status + the three
-  attributes if they changed) via jira update_issue.
+- For EACH action item build a TICKET SPEC. Every ticket uses the same standard format —
+  you decide the content, paul_ticket_body decides the layout. Fields:
+  * complexity:         Low | Medium | High (implementation effort / uncertainty).
+  * priority:           Low | Medium | High | Critical (business urgency).
+  * timeEstimate:       Jira-style string, e.g. "2h", "1d", "3d".
+  * context:            why this exists — the background and facts from the transcript.
+  * goal:               ONE sentence describing what "done" means.
+  * approach:           a NUMBERED PLAN of concrete steps that solve the task — the same
+                        way you would plan the work yourself before starting it. Each step
+                        is one bounded action. This is the most important field: someone
+                        who was not in the meeting must be able to follow it.
+  * acceptanceCriteria: checkable outcomes (2-5), each verifiable without asking anyone.
+  * outOfScope:         optional — what this ticket explicitly does NOT cover.
+  * dependencies:       optional — Jira keys or prerequisites stated in the meeting.
+  * source:             "Meeting Notes: $MEETING_DATE (<page url from PHASE 1>)".
+  * derived:            the names of the fields YOU worked out rather than took from the
+                        meeting, e.g. ["approach","acceptanceCriteria"].
+- MEETINGS RARELY STATE THE APPROACH OR THE ACCEPTANCE CRITERIA. Do not leave those
+  blank and do not write a placeholder: think the task through and DERIVE them, then
+  name them in derived[] so the ticket marks them as proposed rather than decided.
+  Only invent facts about intent — never invent decisions, owners, or deadlines.
+- Call paul_ticket_body ONCE PER ACTION ITEM with that spec. It returns
+  { description, missing, spec }. If "missing" is non-empty, fill those fields in and
+  call it again. Use the returned "description" VERBATIM as the Jira description —
+  never hand-write or reformat it.
+- Check the paul_list results from PHASE 0 first. If an equivalent ticket already exists
+  (same intent / matching title or meta.externalId), do NOT create a duplicate — reuse
+  the existing Jira key and jira update_issue it with the freshly rendered description
+  (and the status if it changed), so older free-form tickets converge on the format.
 - Only create a NEW Jira task in project "$JIRA_PROJECT" for genuinely new action items.
   When creating (jira create_issue) set ONLY the summary and the description.
   DO NOT set any other Jira fields — no priority, no timetracking/estimate, no labels,
   no duedate, no additional_fields at all. DO NOT assign the ticket to anyone
   (do not call jira assign_issue). This avoids project-specific field/scheme errors.
-  Put the estimates into the description text instead: prepend the line
-  "Complexity: <C> | Priority: <P> | Estimate: <T>" and name any owner in the body.
-- Collect for every created or matched ticket: Jira key, title, status, Complexity,
-  Priority, Time.
+  The attributes live in the description's header line, which paul_ticket_body renders.
+- Collect for every created or matched ticket: Jira key, title, status, and the full spec.
 
 PHASE 3 — RECORD INTO PAUL (with priority-driven order):
 - Decide each ticket's PAUL 'order' (lower = higher priority on the board = done first).
@@ -159,10 +182,12 @@ PHASE 3 — RECORD INTO PAUL (with priority-driven order):
   * tickets: [ for each ticket from PHASE 2: { externalId: "<JIRA-KEY>", title: "<summary>",
                status: "<backlog|todo|in_progress|blocked|review|done>", order: <computed order>,
                issueType: "Task", url: "<issue url>",
-               complexity: "<Low|Medium|High>", priority: "<Low|Medium|High|Critical>",
-               timeEstimate: "<e.g. 2h|1d>" } ]
-    (complexity/priority/timeEstimate are carried in each ticket's meta so PAUL memory
-     stays the source of truth for board ordering.)
+               plus THE WHOLE SPEC you passed to paul_ticket_body: complexity, priority,
+               timeEstimate, context, goal, approach, acceptanceCriteria, outOfScope,
+               dependencies, source, derived } ]
+    (complexity/priority/timeEstimate drive board ordering; the full spec is stored in
+     meta.spec so any later run can re-render the exact same description without
+     re-reading the transcript.)
   * cursorPhase / cursorNote: update these if this meeting moved the roadmap
     (e.g. a new sprint/phase was decided). Dedup is by externalId, so re-runs update in place.
 
