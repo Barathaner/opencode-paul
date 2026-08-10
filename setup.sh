@@ -107,26 +107,65 @@ hdr "3/6  Atlassian connection"
 echo "${DIM}PAUL syncs meetings→Confluence and action items→Jira. Get an API token at:${RST}"
 echo "${DIM}  https://id.atlassian.com/manage-profile/security/api-tokens${RST}"
 
+# Pasting a whole page into the terminal leaves its remaining lines in the input
+# buffer, where they silently answer the NEXT prompts. Drop anything already
+# buffered before asking, so every answer is one the user actually typed here.
+drain_stdin() {
+  [ -t 0 ] || return 0
+  local junk
+  while read -r -t 0 2>/dev/null; do read -r -t 0.05 junk 2>/dev/null || break; done
+}
+
+# Keys get copied out of the prompt hint ("[KAN]"), out of URLs, and out of docs
+# with quotes attached. Strip that decoration rather than storing it: a key like
+# "[KAN]" validates fine as a string and then 404s on every call.
+norm_token() {
+  printf '%s' "$1" | tr -d '[:space:]' | sed "s/^[\"']*//; s/[\"']*\$//; s/^\[//; s/\]\$//"
+}
+
 ask() { # ask VAR "prompt" "default"  (skips if VAR already set in env)
-  local var="$1" prompt="$2" def="${3:-}" cur="${!1:-}"
+  local var="$1" prompt="$2" def="${3:-}" cur="${!1:-}" reply
   if [ -n "$cur" ]; then eval "$var=\$cur"; return; fi
   if [ "$NONINTERACTIVE" = "1" ]; then eval "$var=\$def"; return; fi
   local d=""; [ -n "$def" ] && d=" ${DIM}[$def]${RST}"
+  drain_stdin
   printf "   %s%s: " "$prompt" "$d"; read -r reply
   eval "$var=\"\${reply:-$def}\""
 }
 ask_secret() {
-  local var="$1" prompt="$2" cur="${!1:-}"
+  local var="$1" prompt="$2" cur="${!1:-}" reply
   if [ -n "$cur" ]; then eval "$var=\$cur"; return; fi
   if [ "$NONINTERACTIVE" = "1" ]; then return; fi
+  drain_stdin
   printf "   %s: " "$prompt"; read -rs reply; echo; eval "$var=\"$reply\""
+}
+ask_key() { # ask_key VAR "prompt" "default" "regex" "what it is" [upper]
+  local var="$1" prompt="$2" def="$3" re="$4" what="$5" upper="${6:-}" cur="${!1:-}" reply v tries=0
+  while :; do
+    if [ -n "$cur" ]; then v="$(norm_token "$cur")"; cur=""
+    elif [ "$NONINTERACTIVE" = "1" ]; then v="$(norm_token "$def")"
+    else
+      drain_stdin
+      printf "   %s ${DIM}[%s]${RST}: " "$prompt" "$def"; read -r reply
+      v="$(norm_token "${reply:-$def}")"
+    fi
+    [ "$upper" = "upper" ] && v="$(printf '%s' "$v" | tr '[:lower:]' '[:upper:]')"
+    [[ "$v" =~ $re ]] && break
+    warn "'$v' is not a valid $what."
+    [ "$NONINTERACTIVE" = "1" ] && die "Set $var to a valid $what (e.g. $def)."
+    tries=$((tries + 1))
+    [ "$tries" -ge 3 ] && die "Too many invalid entries for $what."
+  done
+  eval "$var=\$v"
 }
 
 ask        JIRA_URL          "Atlassian base URL (e.g. https://you.atlassian.net)"
 ask        JIRA_EMAIL        "Atlassian account email"
 ask_secret ATLASSIAN_API_TOKEN "Atlassian API token (hidden)"
-ask        JIRA_PROJECT      "Jira project key" "KAN"
-ask        CONFLUENCE_SPACE  "Confluence space key" "SOFTWAREEN"
+ask_key    JIRA_PROJECT      "Jira project key" "KAN" '^[A-Z][A-Z0-9_]{1,9}$' "Jira project key" upper
+# Personal Confluence spaces are "~" plus a lowercase account id, so this one is
+# deliberately not upper-cased.
+ask_key    CONFLUENCE_SPACE  "Confluence space key" "SOFTWAREEN" '^~?[A-Za-z0-9_]{1,60}$' "Confluence space key"
 
 JIRA_URL="${JIRA_URL%/}"
 CONFLUENCE_URL="$JIRA_URL/wiki"
@@ -134,19 +173,59 @@ CONFLUENCE_URL="$JIRA_URL/wiki"
 [ -n "${JIRA_URL:-}" ] && [ -n "${JIRA_EMAIL:-}" ] && [ -n "${ATLASSIAN_API_TOKEN:-}" ] \
   || die "JIRA_URL, JIRA_EMAIL and ATLASSIAN_API_TOKEN are required."
 
-# --- 4. validate credentials against the Jira API ---------------------------
-hdr "4/6  Validating credentials"
-CODE=$(curl -sS -o /tmp/paul_myself.$$ -w '%{http_code}' \
-  -u "$JIRA_EMAIL:$ATLASSIAN_API_TOKEN" \
-  -H "Accept: application/json" "$JIRA_URL/rest/api/3/myself" 2>/dev/null || echo 000)
+# --- 4. validate credentials + the project and space actually exist ----------
+hdr "4/6  Validating connection"
+
+# GET a URL with the collected credentials; echoes the HTTP status, body in $2.
+api_code() {
+  curl -sS -o "$2" -w '%{http_code}' -u "$JIRA_EMAIL:$ATLASSIAN_API_TOKEN" \
+    -H "Accept: application/json" "$1" 2>/dev/null || echo 000
+}
+
+RESP=/tmp/paul_check.$$
+trap 'rm -f "$RESP"' EXIT
+
+CODE=$(api_code "$JIRA_URL/rest/api/3/myself" "$RESP")
 if [ "$CODE" = "200" ]; then
-  NAME=$(jq -r '.displayName // .emailAddress // "unknown"' /tmp/paul_myself.$$ 2>/dev/null)
+  NAME=$(jq -r '.displayName // .emailAddress // "unknown"' "$RESP" 2>/dev/null)
   ok "authenticated as ${BOLD}$NAME${RST}"
 else
   warn "Jira auth check returned HTTP $CODE (continuing, but double-check URL/email/token)."
-  [ -s /tmp/paul_myself.$$ ] && echo "${DIM}   $(head -c 200 /tmp/paul_myself.$$)${RST}"
+  [ -s "$RESP" ] && echo "${DIM}   $(head -c 200 "$RESP")${RST}"
 fi
-rm -f /tmp/paul_myself.$$
+
+# Auth alone is not enough: a key that does not exist authenticates fine and then
+# fails on every ticket or page PAUL tries to touch, hours later. Check now, while
+# nothing has been written yet and the answer is still cheap to correct.
+# PAUL_SKIP_CHECKS=1 escapes this for restricted tokens or air-gapped runs.
+check_exists() { # check_exists VAR "url template with %s" "what" "retry prompt" regex [upper]
+  local var="$1" tmpl="$2" what="$3" prompt="$4" re="$5" upper="${6:-}" tries=0 code url
+  [ "$CODE" = "200" ] || return 0            # auth already failed; do not pile on
+  [ "${PAUL_SKIP_CHECKS:-0}" = "1" ] && { warn "skipped the $what check (PAUL_SKIP_CHECKS=1)"; return 0; }
+  while :; do
+    printf -v url "$tmpl" "${!var}"
+    code=$(api_code "$url" "$RESP")
+    case "$code" in
+      200) ok "$what ${BOLD}${!var}${RST} found"; return 0 ;;
+      401|403) warn "no permission to read $what '${!var}' (HTTP $code) — continuing"; return 0 ;;
+      000) warn "could not reach Atlassian to check the $what — continuing"; return 0 ;;
+    esac
+    warn "$what '${!var}' does not exist on $JIRA_URL (HTTP $code)."
+    tries=$((tries + 1))
+    if [ "$NONINTERACTIVE" = "1" ] || [ "$tries" -ge 3 ]; then
+      die "Fix the $what and re-run, or set PAUL_SKIP_CHECKS=1 to bypass this check."
+    fi
+    unset "$var"
+    ask_key "$var" "$prompt" "${!var:-}" "$re" "$what" "$upper"
+  done
+}
+
+check_exists JIRA_PROJECT "$JIRA_URL/rest/api/3/project/%s" "Jira project" \
+  "Jira project key" '^[A-Z][A-Z0-9_]{1,9}$' upper
+check_exists CONFLUENCE_SPACE "$CONFLUENCE_URL/rest/api/space/%s" "Confluence space" \
+  "Confluence space key" '^~?[A-Za-z0-9_]{1,60}$'
+
+rm -f "$RESP"; trap - EXIT
 
 # --- 5. write config + secrets ----------------------------------------------
 hdr "5/6  Writing OpenCode config"
@@ -231,9 +310,46 @@ fi
 
 # --- 6. verify ---------------------------------------------------------------
 hdr "6/6  Verifying install"
-if [ -f "$REPO_DIR/scripts/verify.mjs" ]; then
-  ( cd "$REPO_DIR" && npm test --silent 2>/dev/null || node --experimental-strip-types scripts/verify.mjs ) \
-    | tail -1 | grep -q "0 failed" && ok "tool harness passed" || warn "harness reported issues (see: cd $REPO_DIR && npm test)"
+
+# The harness imports @opencode-ai/plugin. That SDK ships inside OpenCode, so it is
+# a PEER dependency — and npm never installs a root package's peers. A fresh clone
+# therefore has nothing to import and the harness dies with ERR_MODULE_NOT_FOUND.
+# Install the checkout's dev dependencies first; this is what makes the very first
+# run on a new machine work.
+SDK_DIR="$REPO_DIR/node_modules/@opencode-ai/plugin"
+if [ ! -d "$SDK_DIR" ]; then
+  say "installing test dependencies (@opencode-ai/plugin)…"
+  if ( cd "$REPO_DIR" && npm install --silent --no-audit --no-fund >/dev/null 2>&1 ); then
+    ok "test dependencies installed"
+  else
+    warn "could not install test dependencies (offline?)"
+  fi
+fi
+
+if [ ! -d "$SDK_DIR" ]; then
+  warn "skipping the harness — @opencode-ai/plugin is not installed."
+  warn "run it later with: ${BOLD}cd $REPO_DIR && npm install && npm test${RST}"
+elif [ -f "$REPO_DIR/scripts/verify.mjs" ]; then
+  HARNESS_OUT=$( cd "$REPO_DIR" && npm test --silent 2>&1 )
+  HARNESS_LAST=$(printf '%s\n' "$HARNESS_OUT" | tail -1)
+  if printf '%s' "$HARNESS_LAST" | grep -q "0 failed"; then
+    ok "tool harness passed ${DIM}(${HARNESS_LAST//=/})${RST}"
+  else
+    warn "harness reported issues (re-run: cd $REPO_DIR && npm test):"
+    printf '%s\n' "$HARNESS_OUT" | grep -E "^FAIL|Error" | head -5 | sed 's/^/     /'
+  fi
+fi
+
+# mcp-atlassian is what actually talks to Jira and Confluence. Resolving it now
+# both proves it can start and warms the uvx cache, so the first OpenCode run does
+# not stall on a silent download. Never fatal: setup is still valid without it.
+if command -v uvx >/dev/null 2>&1; then
+  say "checking mcp-atlassian can start…"
+  if timeout 180 uvx mcp-atlassian --help >/dev/null 2>&1; then
+    ok "mcp-atlassian ready ${DIM}(uvx cache warmed)${RST}"
+  else
+    warn "could not start mcp-atlassian via uvx — OpenCode will retry on first use."
+  fi
 fi
 
 # --- teach PAUL the project you already have ---------------------------------

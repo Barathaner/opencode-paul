@@ -26,12 +26,15 @@ cd opencode-paul
 3. Ask for your **Atlassian base URL, email, API token**, Jira project key and Confluence
    space (get a token at
    [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)).
-4. **Validate** the credentials against the Jira API.
+4. **Validate** the credentials against the Jira API, and check that the Jira project and
+   Confluence space you named actually exist — a key that does not exist authenticates fine and
+   then fails on every ticket hours later. Set `PAUL_SKIP_CHECKS=1` to bypass (restricted tokens).
 5. Write the token to a private `~/.config/opencode/paul.env` (chmod 600, git-ignored) and
    merge the `mcp-atlassian` server + PAUL plugin into `opencode.json` **non-destructively**
    (your existing config is backed up first; the token is stored as `{env:...}`, never inline).
-6. Append the PAUL behavior block to your `AGENTS.md`, install the `/paul-init-docs` command, and
-   run the test harness.
+6. Append the PAUL behavior block to your `AGENTS.md`, install the `/paul-init-docs` command,
+   install the checkout's test dependencies, run the test harness, and confirm `mcp-atlassian`
+   starts (which also warms the `uvx` cache, so your first OpenCode run does not stall).
 7. Offer to **index your existing Confluence space and Jira project into PAUL memory** — read-only
    apart from PAUL's own mirror page. Say yes and PAUL already knows your project when you open
    OpenCode.

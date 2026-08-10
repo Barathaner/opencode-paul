@@ -46,6 +46,10 @@
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.0.0"
   },
+  "//devDependencies": "The SDK ships with OpenCode, so it stays a peer dependency for consumers. npm never installs a ROOT package's peers, though, so a fresh clone has nothing for the test harness to import — it is duplicated here to make `npm install && npm test` work in a checkout.",
+  "devDependencies": {
+    "@opencode-ai/plugin": ">=1.0.0"
+  },
   "engines": {
     "node": ">=22"
   }

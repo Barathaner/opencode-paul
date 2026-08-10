@@ -340,6 +340,17 @@ const missingFiles = NEEDED.filter((d) => !(pkg.files || []).includes(d))
 ok(missingFiles.length === 0,
   `package.json files[] ships every runtime dir${missingFiles.length ? ` (missing: ${missingFiles})` : ""}`)
 
+// This very harness imports @opencode-ai/plugin. It is a peer dependency, and npm does not
+// install a ROOT package's peers, so without a dev entry a fresh clone dies on
+// ERR_MODULE_NOT_FOUND before a single test runs — which is exactly what happened.
+ok((pkg.devDependencies || {})["@opencode-ai/plugin"] !== undefined,
+  "package.json declares @opencode-ai/plugin as a devDependency (fresh clone can run the harness)")
+const setup = readFileSync(REPO + "setup.sh", "utf8")
+ok(setup.includes("npm install") && setup.includes("node_modules/@opencode-ai/plugin"),
+  "setup.sh installs test dependencies before running the harness")
+ok(setup.includes("rest/api/3/project/") && setup.includes("rest/api/space/"),
+  "setup.sh verifies the Jira project and Confluence space actually exist")
+
 // Install URLs must agree with each other — a repo that does not exist breaks the quick start.
 const urlSources = ["README.md", "package.json"].map((f) => readFileSync(REPO + f, "utf8")).join("\n")
 const owners = [...urlSources.matchAll(/github(?:\.com\/|:)([\w-]+)\/opencode-paul/g)].map((m) => m[1])
