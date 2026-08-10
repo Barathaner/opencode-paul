@@ -26,6 +26,8 @@
 #   PAUL_CONFLUENCE_SPACE   Confluence space key                       (SOFTWAREEN)
 #   PAUL_JIRA_PROJECT       Jira project key                           (KAN)
 #   PAUL_AGENTSMEMORY_TITLE title of the shared memory page            (AGENTSMEMORY)
+#   PAUL_MEETING_NOTES_PARENT_TITLE  title of the meeting-notes folder page   (Meeting Notes)
+#   PAUL_MEETING_NOTES_PARENT_ID     page id of that folder, skips the lookup (unset)
 #   PAUL_ROLES              comma-separated role vocabulary            (built-in defaults)
 #
 # People are never named. Every participant is registered as a project role via
@@ -71,7 +73,9 @@ paul_load_env() {
              PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
              PAUL_JIRA_BOARD_SUBFILTERS PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
              PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
-             PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
+             PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES \
+             PAUL_STALE_MARKERS PAUL_STALE_LABELS \
+             PAUL_MEETING_NOTES_PARENT_TITLE PAUL_MEETING_NOTES_PARENT_ID; do
       [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
     done
   fi
@@ -92,6 +96,8 @@ PROJECT_DIR="${PAUL_PROJECT_DIR:-$AUTOMATION_DIR/paul-${PAUL_PROFILE:-project}}"
 CONFLUENCE_SPACE="${PAUL_CONFLUENCE_SPACE:-SOFTWAREEN}"
 JIRA_PROJECT="${PAUL_JIRA_PROJECT:-KAN}"
 AGENTSMEMORY_TITLE="${PAUL_AGENTSMEMORY_TITLE:-AGENTSMEMORY}"
+MEETING_NOTES_PARENT_TITLE="${PAUL_MEETING_NOTES_PARENT_TITLE:-Meeting Notes}"
+MEETING_NOTES_PARENT_ID="${PAUL_MEETING_NOTES_PARENT_ID:-}"
 
 # Which Atlassian MCP server this profile owns. With two sites installed side by side,
 # both servers are enabled and the agent picks one — this pipeline WRITES, so picking
@@ -244,6 +250,15 @@ PHASE 0.5 — PEOPLE ARE ROLES, NEVER NAMES (do this before writing ANYTHING):
   PAUL rewrites names it recognises, but that is a safety net, not your excuse.
 
 PHASE 1 — MEETING NOTES PAGE:
+- Meeting notes live under one folder page, never loose at the space root, so they
+  don't clutter the documentation tree. Resolve that folder page's id, in order:
+  1. If "$MEETING_NOTES_PARENT_ID" is non-empty, use it directly as the parent id.
+  2. Otherwise call confluence_search with cql: title = "$MEETING_NOTES_PARENT_TITLE"
+     AND space = "$CONFLUENCE_SPACE" AND type = page. If found, use that page's id.
+  3. Otherwise create it: confluence_create_page(space_key="$CONFLUENCE_SPACE",
+     title="$MEETING_NOTES_PARENT_TITLE", content="Container page for meeting notes
+     created by the PAUL pipeline. Individual meetings are nested under this page.").
+     Use the returned id.
 - Compose the page body: an overview, the key decisions, and the extracted action items.
   DO NOT include the transcript — it is never uploaded.
 - List each action item with the SAME fields you will put on its ticket in PHASE 2, so
@@ -251,11 +266,16 @@ PHASE 1 — MEETING NOTES PAGE:
   "Complexity: <C> | Priority: <P> | Estimate: <T>".
 - Pass the finished body through paul_roles(scrub: "<body>") and use the returned text.
   You are writing this page directly via mcp-atlassian, so this is the only gate.
-- Create the page in space "$CONFLUENCE_SPACE" titled "Meeting Notes: $MEETING_DATE" with
-  that scrubbed body. Remember the returned pageId and page URL.
+- Create the page in space "$CONFLUENCE_SPACE" titled "Meeting Notes: $MEETING_DATE",
+  with parent_id set to the folder page id resolved above, and that scrubbed body.
+  Remember the returned pageId and page URL.
 
 PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PAUL):
 - Extract every action item from the transcript.
+- Call paul_list(type="doc") ONCE for this whole phase (already local — synced from AGENTSMEMORY
+  in PHASE 0, no extra Confluence call). This is the standing knowledge (specs/ADRs/architecture
+  docs) already in memory. If it returns no entries, background stays empty for every ticket below
+  and you proceed exactly as before — do not search Confluence for this, do not call confluence_search.
 - For EACH action item build a TICKET SPEC. Every ticket uses the same standard format —
   you decide the content, paul_ticket_body decides the layout. Fields:
   * complexity:         Low | Medium | High (implementation effort / uncertainty).
@@ -263,11 +283,22 @@ PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PA
   * timeEstimate:       Jira-style string, e.g. "2h", "1d", "3d".
   * context:            why this exists — the background and facts from the transcript.
                         Name people by ROLE only, e.g. "the Backend Developer raised this".
+  * background:         optional, at most 3 entries. Scan the paul_list(type="doc") titles/summaries
+                        from the step above for genuine topical overlap with THIS action item (same
+                        subsystem, same component, same ADR area) — not a keyword coincidence. For
+                        each real match add { title, url, note } where note is one clause on why it
+                        is relevant. If nothing is genuinely relevant, leave this empty — never force
+                        a reference just to fill the field. These are background, not decisions: if a
+                        matched doc fixes a real constraint (e.g. an ADR), say so in the note, but do
+                        not treat an unrelated doc as authoritative just because it exists.
   * goal:               ONE sentence describing what "done" means.
   * approach:           a NUMBERED PLAN of concrete steps that solve the task — the same
                         way you would plan the work yourself before starting it. Each step
                         is one bounded action. This is the most important field: someone
-                        who was not in the meeting must be able to follow it.
+                        who was not in the meeting must be able to follow it. If a background
+                        reference fixes a relevant constraint or decision, align the steps with
+                        it and say so in the step text (e.g. "Follow the encryption approach
+                        from ADR-010"); do not silently contradict a matched reference.
   * acceptanceCriteria: checkable outcomes (2-5), each verifiable without asking anyone.
   * outOfScope:         optional — what this ticket explicitly does NOT cover.
   * dependencies:       optional — Jira keys or prerequisites stated in the meeting.
@@ -294,6 +325,7 @@ $REWRITE_RULE
   The attributes live in the description's header line, which paul_ticket_body renders.
 - Collect for every created or matched ticket: Jira key, title, status, and the full spec.
 
+
 PHASE 3 — RECORD INTO PAUL (with priority-driven order):
 - Decide each ticket's PAUL 'order' (lower = higher priority on the board = done first).
   Rank by Priority first (Critical < High < Medium < Low), then by Complexity/Time as
@@ -307,7 +339,7 @@ PHASE 3 — RECORD INTO PAUL (with priority-driven order):
                status: "<backlog|todo|in_progress|blocked|review|done>", order: <computed order>,
                issueType: "Task", url: "<issue url>",
                plus THE WHOLE SPEC you passed to paul_ticket_body: complexity, priority,
-               timeEstimate, context, goal, approach, acceptanceCriteria, outOfScope,
+               timeEstimate, context, background, goal, approach, acceptanceCriteria, outOfScope,
                dependencies, source, derived } ]
     (complexity/priority/timeEstimate drive board ordering; the full spec is stored in
      meta.spec so any later run can re-render the exact same description without

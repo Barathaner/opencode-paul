@@ -61,6 +61,15 @@
 #   PAUL_CONFLUENCE_ROOT_TITLES their titles, for readable logs
 #   PAUL_MEETING_HALFLIFE_DAYS  how fast a meeting note stops being current   (30)
 #                           Standing docs (architecture, ADRs) are never aged out.
+#   PAUL_STALE_MARKERS      comma-separated words that mark a page/folder TITLE as
+#                           stale, matched case-insensitively as a substring; a match
+#                           on a folder excludes every descendant too, and any page
+#                           already in memory whose title now matches is removed
+#                           (default: archive,archived,legacy,deprecated,obsolete,old,
+#                            sunset,superseded,do-not-use,outdated)
+#   PAUL_STALE_LABELS       comma-separated Confluence labels that mark a page stale,
+#                           checked one confluence_search per label
+#                           (default: deprecated,archived,obsolete,legacy,stale,outdated)
 #   PAUL_AGENTSMEMORY_TITLE title of the shared memory page            (AGENTSMEMORY)
 #   PAUL_ROLES              comma-separated role vocabulary            (built-in defaults)
 #
@@ -106,7 +115,9 @@ paul_load_env() {
              PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
              PAUL_JIRA_BOARD_SUBFILTERS PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
              PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
-             PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
+             PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES \
+             PAUL_STALE_MARKERS PAUL_STALE_LABELS \
+             PAUL_MEETING_NOTES_PARENT_TITLE PAUL_MEETING_NOTES_PARENT_ID; do
       [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
     done
   fi
@@ -145,6 +156,12 @@ CONFLUENCE_ROOT_TITLES="${PAUL_CONFLUENCE_ROOT_TITLES:-}"
 # How fast a meeting note stops being current. 30 days puts anything past two months
 # into the shallowest tier. Standing documents are never aged out — see the prompt.
 MEETING_HALFLIFE_DAYS="${PAUL_MEETING_HALFLIFE_DAYS:-30}"
+
+# Stale/legacy exclusion: substring match on page/folder TITLE, and Confluence LABELS.
+# A title match on a folder excludes it and everything under it; a label match excludes
+# that page alone. Either kind also removes a previously-indexed entry that now matches.
+STALE_MARKERS="${PAUL_STALE_MARKERS:-archive,archived,legacy,deprecated,obsolete,old,sunset,superseded,do-not-use,outdated}"
+STALE_LABELS="${PAUL_STALE_LABELS:-deprecated,archived,obsolete,legacy,stale,outdated}"
 
 # The JQL builder both renderers share, plus the two preflight counters.
 . "$REPO_DIR/scripts/lib/jira_scope.sh"
@@ -325,6 +342,8 @@ CONFLUENCE_SCOPE="${CONFLUENCE_SCOPE//&/\\&}"
 CONFLUENCE_ROOTS_ESC="${CONFLUENCE_ROOTS//&/\\&}"
 [ -n "$CONFLUENCE_ROOTS_ESC" ] || CONFLUENCE_ROOTS_ESC="(none)"
 JIRA_JQL="${JIRA_JQL//&/\\&}"
+STALE_MARKERS_ESC="${STALE_MARKERS//&/\\&}"
+STALE_LABELS_ESC="${STALE_LABELS//&/\\&}"
 
 render_prompt() {
   awk -v space="$CONFLUENCE_SPACE" \
@@ -337,6 +356,8 @@ render_prompt() {
       -v halflife="$MEETING_HALFLIFE_DAYS" \
       -v expected="$JIRA_EXPECTED" \
       -v mcp="$MCP_KEY" \
+      -v stalemarkers="$STALE_MARKERS_ESC" \
+      -v stalelabels="$STALE_LABELS_ESC" \
       -v mode="$MODE_LINE" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
@@ -349,6 +370,8 @@ render_prompt() {
       gsub(/\{\{JIRA_SCOPE\}\}/, scope)
       gsub(/\{\{JIRA_EXPECTED\}\}/, expected)
       gsub(/\{\{MCP_SERVER\}\}/, mcp)
+      gsub(/\{\{STALE_MARKERS\}\}/, stalemarkers)
+      gsub(/\{\{STALE_LABELS\}\}/, stalelabels)
       if ($0 ~ /\{\{MODE\}\}/) { print mode; next }
       print
     }
@@ -396,6 +419,7 @@ else
 fi
 log "Space: $CONFLUENCE_SPACE — $CF_SCOPE_LINE | Jira project: $JIRA_PROJECT | $SCOPE_LINE | reset: $RESET"
 log "Jira search: $JIRA_JQL"
+log "Stale exclusion: title/folder markers [$STALE_MARKERS] | labels [$STALE_LABELS]"
 # The scope size, before anything reads anything: a wrong scope is visible here in seconds
 # instead of an hour later in a ticket count nobody can explain.
 log "Jira scope: $JIRA_EXPECTED issues match that search"

@@ -14,7 +14,9 @@
 # PAUL_JIRA_BOARD_FILTERS + PAUL_JIRA_BOARD_SUBFILTERS (written to ~/.config/opencode/paul.env
 # by setup.sh), then to the built-in defaults. The filter ids plus each board's sub-filter
 # narrow the command's Jira search to what those boards actually show, matching what
-# scripts/init_from_docs.sh indexes from the CLI.
+# scripts/init_from_docs.sh indexes from the CLI. PAUL_STALE_MARKERS / PAUL_STALE_LABELS
+# (also from paul.env) carry through the same way, so the installed command excludes
+# archive/deprecated documentation exactly like the CLI run does.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,6 +31,8 @@ CONFLUENCE_ROOT_TITLES="${PAUL_CONFLUENCE_ROOT_TITLES:-}"
 MEETING_HALFLIFE_DAYS="${PAUL_MEETING_HALFLIFE_DAYS:-30}"
 BOARD_SUBFILTERS="${PAUL_JIRA_BOARD_SUBFILTERS:-}"
 BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}"
+STALE_MARKERS="${PAUL_STALE_MARKERS:-archive,archived,legacy,deprecated,obsolete,old,sunset,superseded,do-not-use,outdated}"
+STALE_LABELS="${PAUL_STALE_LABELS:-deprecated,archived,obsolete,legacy,stale,outdated}"
 
 # Same search scripts/init_from_docs.sh builds, from the same function: `filter = <id>`
 # and the board's sub-filter are both resolved by Jira at query time, so the command
@@ -63,6 +67,8 @@ CONFLUENCE_SCOPE=""
 CONFLUENCE_SCOPE="${CONFLUENCE_SCOPE//&/\\&}"
 CONFLUENCE_ROOTS_ESC="${CONFLUENCE_ROOTS//&/\\&}"
 [ -n "$CONFLUENCE_ROOTS_ESC" ] || CONFLUENCE_ROOTS_ESC="(none)"
+STALE_MARKERS="${STALE_MARKERS//&/\\&}"
+STALE_LABELS="${STALE_LABELS//&/\\&}"
 
 # A profile installs its own command, so two PAULs give you /paul-init-docs-a and
 # /paul-init-docs-b instead of one overwriting the other. No profile = the old name.
@@ -103,6 +109,7 @@ FRONTMATTER
       -v jql="$JQL" -v scope="$SCOPE" -v mode="$MODE_LINE" -v expected="unknown" \
       -v cfscope="$CONFLUENCE_SCOPE" -v cfroots="$CONFLUENCE_ROOTS_ESC" \
       -v halflife="$MEETING_HALFLIFE_DAYS" \
+      -v stalemarkers="$STALE_MARKERS" -v stalelabels="$STALE_LABELS" \
       -v mcp="$MCP_KEY" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
@@ -115,6 +122,8 @@ FRONTMATTER
       gsub(/\{\{CONFLUENCE_ROOTS\}\}/, cfroots)
       gsub(/\{\{MEETING_HALFLIFE_DAYS\}\}/, halflife)
       gsub(/\{\{MCP_SERVER\}\}/, mcp)
+      gsub(/\{\{STALE_MARKERS\}\}/, stalemarkers)
+      gsub(/\{\{STALE_LABELS\}\}/, stalelabels)
       if ($0 ~ /\{\{MODE\}\}/) { print mode; next }
       print
     }

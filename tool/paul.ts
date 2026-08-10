@@ -40,11 +40,18 @@ type Entry = {
  * persisted in an entry's `meta.spec`, so the structured form survives the
  * round-trip through Confluence and is never re-derived from prose.
  */
+type BackgroundRef = {
+  title: string                // referenced doc/entry title
+  url?: string                 // link, when known
+  note: string                 // one clause: why this is relevant to the ticket
+}
+
 type TicketSpec = {
   complexity?: string          // Low | Medium | High
   priority?: string            // Low | Medium | High | Critical
   timeEstimate?: string        // Jira-style, e.g. 2h, 1d, 3d
   context?: string             // why this exists — facts from the meeting
+  background?: BackgroundRef[] // optional; related PAUL memory docs/entries found by paul_list, not the meeting
   goal?: string                // one sentence definition of done
   approach?: string[]          // numbered plan; derived when the meeting did not state it
   acceptanceCriteria?: string[]// rendered as checkboxes
@@ -61,12 +68,20 @@ type TicketSpec = {
  * dedup guarantee (no duplicate ticket for an externalId already in the store)
  * comes from the upsert-by-externalId map below and does not depend on this —
  * coverage only tells a human how much of the source the run actually read.
+ *
+ * skipped[].excludedCount lets ONE entry stand in for many pages — a whole
+ * archive/deprecated subtree excluded in one shot by title, folder or label —
+ * without the caller having to write one skipped[] bullet per descendant.
+ * Defaults to 1 when omitted, so an ordinary single-page skip ("template",
+ * "empty stub") needs no change. The gap math below sums excludedCount, not
+ * skipped.length, so a rolled-up exclusion is never miscounted as "unaccounted
+ * for" just because it was reported as one entry instead of twenty-five.
  */
 type CoverageReport = {
   checkedAt: string
   jira?: { expected?: number; indexed: number; skipped: number }
   confluence?: { expected?: number; indexed: number; skipped: number }
-  skipped?: { externalId: string; title?: string; reason: string; source?: string }[]
+  skipped?: { externalId: string; title?: string; reason: string; source?: string; excludedCount?: number }[]
   gaps?: string[]            // human-readable description of every unexplained difference
 }
 
@@ -511,7 +526,7 @@ export const roles = tool({
 // the content; this renderer decides the layout, so every ticket PAUL produces
 // looks the same and carries enough context for someone else to pick it up.
 
-const TICKET_FORMAT_VERSION = 1
+const TICKET_FORMAT_VERSION = 2
 
 const REQUIRED_SPEC_FIELDS = [
   "complexity", "priority", "timeEstimate",
@@ -559,6 +574,18 @@ function renderTicketDescription(spec: TicketSpec): string {
   )
 
   out.push("", "## Context", spec.context?.trim() || NEEDS_CLARIFICATION)
+
+  const refs = (spec.background || []).filter((r) => r && !isBlank(r.title) && !isBlank(r.note))
+  if (refs.length) {
+    out.push("", "## Background")
+    for (const r of refs) {
+      const title = r.title.trim()
+      const link = r.url?.trim() ? ` (${r.url.trim()})` : ""
+      out.push(`- ${title}${link} — ${r.note.trim()}`)
+    }
+    out.push("", "_Related memory found by PAUL — background, not a decision unless the reference itself states one._")
+  }
+
   out.push("", "## Goal", spec.goal?.trim() || NEEDS_CLARIFICATION)
 
   out.push("", "## Proposed approach")
@@ -592,19 +619,30 @@ function renderTicketDescription(spec: TicketSpec): string {
 /** Collect the spec fields out of a looser arg/ticket object, dropping empties. */
 function specFrom(src: Record<string, unknown>): TicketSpec | undefined {
   const spec: Record<string, unknown> = {}
-  for (const k of ["complexity", "priority", "timeEstimate", "context", "goal", "approach",
-                   "acceptanceCriteria", "outOfScope", "dependencies", "source", "derived"]) {
+  for (const k of ["complexity", "priority", "timeEstimate", "context", "background", "goal",
+                   "approach", "acceptanceCriteria", "outOfScope", "dependencies", "source", "derived"]) {
     if (!isBlank(src[k])) spec[k] = src[k]
   }
   if (!Object.keys(spec).length) return undefined
   return { ...spec, specVersion: TICKET_FORMAT_VERSION } as TicketSpec
 }
 
+const BACKGROUND_ARG = S.array(S.object({
+  title: S.string().describe("Title of the related PAUL memory doc/entry"),
+  url: S.string().optional().describe("Link to the reference, when known"),
+  note: S.string().describe("One clause: why this reference is relevant to the ticket"),
+})).optional().describe(
+  "Optional: at most 3 related docs/entries found in PAUL memory (via paul_list) that give " +
+  "background for this ticket — e.g. an ADR or architecture doc covering the same area. " +
+  "Background, not a decision, unless the reference itself states one. Omit if nothing found; " +
+  "never invent a reference.")
+
 const SPEC_ARGS = {
   complexity: S.string().optional().describe("Implementation effort/uncertainty: Low | Medium | High"),
   priority: S.string().optional().describe("Business urgency: Low | Medium | High | Critical"),
   timeEstimate: S.string().optional().describe("Effort estimate, e.g. 2h, 1d, 3d"),
   context: S.string().optional().describe("Why this exists — background and facts from the meeting"),
+  background: BACKGROUND_ARG,
   goal: S.string().optional().describe("One sentence describing what 'done' means"),
   approach: S.array(S.string()).optional().describe(
     "Numbered plan: the concrete steps to solve this. Derive these from the task itself when the " +
@@ -731,6 +769,13 @@ export const init = tool({
         title: S.string().optional(),
         reason: S.string().describe("Why, e.g. 'template', 'space home', 'empty stub', 'archived'"),
         source: S.string().optional().describe("jira | confluence (default confluence)"),
+        excludedCount: S.number().optional().describe(
+          "How many pages this ONE entry represents. Use this when the entry rolls up a whole " +
+          "excluded subtree — e.g. an archive folder or a title/label match whose descendants were " +
+          "excluded with it — instead of writing one skipped[] entry per descendant. Omit for an " +
+          "ordinary single-page skip; it defaults to 1. This is what keeps the coverage gap math " +
+          "honest: without it, a 24-page archive folder reported as one entry would still be " +
+          "counted as 23 pages 'unaccounted for'."),
       })).optional().describe("Items you decided not to index, with the reason."),
     }).optional().describe(
       "Optional: how much of the source this run actually read. Returned back as a report so a " +
@@ -918,13 +963,19 @@ export const init = tool({
     // externalId map above, not from this.
     const cov = args.coverage as {
       jiraExpected?: number; confluenceExpected?: number
-      skipped?: { externalId: string; title?: string; reason: string; source?: string }[]
+      skipped?: { externalId: string; title?: string; reason: string; source?: string; excludedCount?: number }[]
     } | undefined
     let coverage: CoverageReport | undefined
     if (cov) {
       const skipped = cov.skipped || []
+      // Sum excludedCount, not skipped.length: one entry can roll up an entire excluded
+      // subtree (an archive folder, a title/label match with descendants) and stand in
+      // for many pages. Counting entries instead of pages is what turned a correctly
+      // excluded 24-page folder into "23 unaccounted for" in the gap math.
       const skippedFor = (src: string) =>
-        skipped.filter((s) => (s.source || "confluence").toLowerCase() === src).length
+        skipped
+          .filter((s) => (s.source || "confluence").toLowerCase() === src)
+          .reduce((sum, s) => sum + (s.excludedCount ?? 1), 0)
       const indexedFor = (src: string) =>
         store.entries.filter((e) => (e.meta as any)?.source === src).length
       const gaps: string[] = []

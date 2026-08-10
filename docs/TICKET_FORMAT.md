@@ -20,6 +20,11 @@ Complexity: Medium | Priority: High | Estimate: 1d
 Login breaks for SSO users since the Okta migration.
 Blocks onboarding of the new client.
 
+## Background
+- ADR-010: Encryption vs Mapping Table (<confluence url>) — same auth-boundary area as this fix.
+
+_Related memory found by PAUL — background, not a decision unless the reference itself states one._
+
 ## Goal
 SSO users log in through Okta without the password fallback.
 
@@ -54,6 +59,7 @@ Meeting Notes: 2026-08-10 (<confluence url>)
 | `priority` | `Low \| Medium \| High \| Critical` | yes | business urgency; drives PAUL `order` and the board rank |
 | `timeEstimate` | string | yes | Jira-style, e.g. `2h`, `1d`, `3d` |
 | `context` | string | yes | why this exists — background and facts from the meeting |
+| `background` | `{title, url, note}[]` | no | at most 3 related docs/entries found via `paul_list(type="doc")`; genuine topical matches only, section omitted when empty |
 | `goal` | string | yes | one sentence: what "done" means |
 | `approach` | string[] | yes | numbered plan, one bounded action per step |
 | `acceptanceCriteria` | string[] | yes | 2–5 checkable outcomes, rendered as `- [ ]` |
@@ -83,6 +89,15 @@ If a required field is genuinely empty, the body renders
 `_Needs clarification — not stated in the meeting._` in its place and `paul_ticket_body` returns
 the field name in `missing`. Nothing is silently fabricated and the pipeline never stalls. Such
 tickets are also flagged `— needs detail` in the AGENTSMEMORY Confluence mirror.
+
+## Background: matched from memory, not searched fresh
+
+`background` is populated from `paul_list(type="doc")` — memory already local from PHASE 0's
+AGENTSMEMORY pull — never from a fresh Confluence search. The agent scans doc titles/summaries
+already in memory for genuine topical overlap with the action item (same subsystem, same ADR
+area), caps it at 3 references, and leaves it empty when nothing is a real match rather than
+forcing a reference. A background reference is read as context, not as settled fact, unless the
+referenced doc itself states a decision — the renderer adds a line making that explicit.
 
 ## How it is used
 

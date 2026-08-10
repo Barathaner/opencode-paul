@@ -13,6 +13,7 @@
 # (press Enter to keep); with NONINTERACTIVE=1 they are taken as-is and nothing is asked:
 #   JIRA_URL, JIRA_EMAIL, ATLASSIAN_API_TOKEN, JIRA_PROJECT, CONFLUENCE_SPACE, JIRA_BOARDS
 #   PAUL_REWRITE_DESCRIPTIONS, PAUL_REORDER_APPLY, PAUL_PROTECTED_TERMS
+#   PAUL_STALE_MARKERS, PAUL_STALE_LABELS (not asked interactively; built-in defaults apply)
 #
 # Every interactive run asks every question, including the API token. This script writes a
 # `source .../paul.env` line into your shell rc, so after the first run the token is always
@@ -174,7 +175,7 @@ if [ -f "$SECRETS" ]; then
                     PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
                     PAUL_JIRA_BOARD_SUBFILTERS PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
                     PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
-                    PAUL_PROTECTED_TERMS; do
+                    PAUL_PROTECTED_TERMS PAUL_STALE_MARKERS PAUL_STALE_LABELS; do
              printf 'STORED_%s=%q\n' "$v" "${!v-}"
            done )"
   ok "found existing settings in $SECRETS — press Enter at any prompt to keep them"
@@ -613,6 +614,12 @@ echo "   with a 'Paul' on the team, 'Paul memory' would become 'Full-stack Devel
 echo "   List product/vendor names to protect (comma-separated), or leave empty.${RST}"
 ask PAUL_PROTECTED_TERMS "Protected terms" "${STORED_PAUL_PROTECTED_TERMS:-}"
 
+# Stale/legacy documentation exclusion: not asked interactively (the defaults cover the
+# common conventions), but a value already in the environment or a previous run's
+# secrets file is kept rather than overwritten — same rule as every other PAUL_* setting.
+PAUL_STALE_MARKERS="${PAUL_STALE_MARKERS:-${STORED_PAUL_STALE_MARKERS:-archive,archived,legacy,deprecated,obsolete,old,sunset,superseded,do-not-use,outdated}}"
+PAUL_STALE_LABELS="${PAUL_STALE_LABELS:-${STORED_PAUL_STALE_LABELS:-deprecated,archived,obsolete,legacy,stale,outdated}}"
+
 # --- 6. write config + secrets ----------------------------------------------
 hdr "6/7  Writing OpenCode config"
 
@@ -671,6 +678,14 @@ export PAUL_REORDER_APPLY="${PAUL_REORDER_APPLY:-0}"
 # a teammate's name is also a product name (e.g. "Carl Zeiss,ACME Payments").
 # PAUL, AGENTSMEMORY, OpenCode, Confluence, Jira and Atlassian are always protected.
 export PAUL_PROTECTED_TERMS="$PAUL_PROTECTED_TERMS"
+#
+# /paul-init-docs and init_from_docs.sh skip pages whose TITLE (or an ancestor folder's
+# title) contains one of these words, case-insensitively, and remove any previously
+# indexed page that starts matching later (moved to that folder, or renamed).
+export PAUL_STALE_MARKERS="$PAUL_STALE_MARKERS"
+#
+# Same, but matched against Confluence LABELS rather than titles.
+export PAUL_STALE_LABELS="$PAUL_STALE_LABELS"
 ENV
 chmod 600 "$SECRETS"
 umask 022
@@ -694,6 +709,7 @@ export PAUL_JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS"
 export PAUL_CONFLUENCE_ROOTS="$CONFLUENCE_ROOTS"
 export PAUL_CONFLUENCE_ROOT_TITLES="$CONFLUENCE_ROOT_TITLES"
 export PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS
+export PAUL_STALE_MARKERS PAUL_STALE_LABELS
 
 # 5b. merge opencode.json non-destructively (backup first).
 [ -f "$CONFIG" ] && cp "$CONFIG" "$CONFIG.bak.$(date +%s)" && ok "backed up existing opencode.json"

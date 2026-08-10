@@ -62,6 +62,58 @@ PHASE 2 — PEOPLE ARE ROLES, NEVER NAMES (before you write anything):
 
 PHASE 3 — READ THE DOCUMENTATION (read-only; PHASE 0 still applies):
 
+PHASE 3.0 — EXCLUDE STALE/LEGACY DOCUMENTATION (before reading any page body):
+Some documentation is stale on purpose — moved to an Archive/Legacy folder, or marked
+deprecated — and should never enter the mirror, however current its version number looks.
+Do this against the page tree you already have, so excluding a whole archive tree costs
+nothing extra:
+- TITLE/FOLDER MARKERS: {{STALE_MARKERS}}. Case-insensitive substring match against each
+  page's own title. Walk the tree top-down: the moment a node's title matches, exclude it
+  AND every descendant reachable through parent_id — do not open their bodies, do not read
+  them, do not summarize them individually. Record ONE skipped[] entry for the matched root,
+  e.g. { title: "<matched folder title>", reason: "archive folder (<n> pages excluded with it)",
+  excludedCount: <n>, source: "confluence" }, where <n> counts the descendants, not the folder
+  itself, and excludedCount carries that SAME number as a structured field — not just inside
+  the reason string — so paul_init's coverage math can subtract the whole rolled-up subtree
+  instead of only the one entry (see PHASE 4).
+  THIS IS MECHANICAL, NOT A JUDGMENT CALL. A title match excludes the page and its subtree
+  regardless of how valuable, historical, or well-referenced its content is. Do not reclassify
+  a title-marker match as DOC because its subpages carry real technical content, are still
+  referenced elsewhere, or seem too useful to lose — none of that is a valid reason to keep it
+  in scope, and "the content is still useful" is exactly the reasoning this rule exists to
+  override. If a page's content is genuinely worth keeping despite the marker, the fix is
+  renaming the page or dropping the marker convention in Confluence, not overriding this rule
+  here.
+- LABELS: {{STALE_LABELS}}. For each label in that list, one confluence_search call with cql:
+  label = "<label>" AND space = "{{CONFLUENCE_SPACE}}". Exclude every page id returned (skip
+  its subtree too, by the same parent_id walk) with skipped[] reason "labeled <label>" and, if
+  that page had descendants excluded with it, excludedCount set to the total (page + descendants)
+  for the same coverage-math reason as above. A page already excluded by the title/folder rule
+  does not need a second entry.
+  SAME RULE, NO EXCEPTIONS: a labeled-deprecated page is excluded exactly like a title match —
+  mechanically, not weighed against how useful or well-referenced its content looks. Do not keep
+  a labeled page in scope because the label seems outdated, mis-applied, or the content
+  "deserves" to stay; if the label is wrong, that is fixed in Confluence, not by overriding this
+  rule.
+- Everything that survives both checks proceeds to the read loop below. A page's title is
+  checked again there, on its own (not its ancestors') title, in case a leaf itself was
+  renamed to something like "Old auth flow" without moving folder or picking up a label.
+- NEVER DELETE MEMORY OVER THIS. This exclusion only decides what gets read, summarized, or
+  refreshed from here on — it must NEVER remove an entry paul_list already returned. A page
+  moving into an archive folder or picking up a deprecated label does not erase the knowledge
+  it held; it only means this run stops re-reading it. Do NOT call paul_remove for this reason,
+  under any circumstance.
+- INFORMATIONAL CHECK ONLY (no memory changes): check every existing doc/meeting entry's title
+  (from paul_list) against {{STALE_MARKERS}} and — where you can still resolve it to a live
+  Confluence page id — its current labels against {{STALE_LABELS}}. Anything that newly
+  matches goes in coverage as a `noLongerInScope` note (title, externalId, reason) purely so a
+  human can see it moved/relabeled since it was indexed. The entry itself is left completely
+  untouched: no paul_remove, no paul_update, no re-summarizing. It simply stops being refreshed
+  by future runs because it is no longer in scope. This check is also mechanical: a title/label
+  match goes in noLongerInScope regardless of how valuable the existing entry's summary looks —
+  do not skip reporting a match because the stored content seems worth keeping. Reporting it
+  costs nothing, since it never touches the entry either way.
+
 Confluence — the space "{{CONFLUENCE_SPACE}}":
 - ENUMERATE THE SPACE WITH ONE CALL: confluence_get_space_page_tree(space_key="{{CONFLUENCE_SPACE}}",
   limit=1000). It returns every page as { id, title, parent_id, position, depth } plus total_pages.
@@ -94,20 +146,37 @@ Confluence — the space "{{CONFLUENCE_SPACE}}":
   * MEETING — notes from a dated event: meeting notes, standup, retro, planning, review.
   * DOC — standing knowledge: architecture or feature spec, decision record, reference, runbook,
     onboarding, process/convention page.
-  * SKIP — templates, empty stubs, personal scratch pages, archived duplicates. Say in your final
-    report which pages you skipped and why.
+  * SKIP — templates, empty stubs, personal scratch pages, archived duplicates, a title that
+    matches {{STALE_MARKERS}} on its own (PHASE 3.0 already caught ancestors; this catches a
+    renamed leaf), or a body that OPENS with an explicit deprecation/archival notice — a status
+    macro reading "Deprecated"/"Archived", or a line like "This page is deprecated/superseded
+    by <link>" — even though nothing in the title, folder or labels flagged it. A title/folder/
+    label marker match is SKIP UNCONDITIONALLY — see PHASE 3.0. Content quality, how well
+    referenced a page is, or how much historical value its subpages carry never moves a marker
+    match back to DOC; that judgment does not apply here. Say in your final report which pages
+    you skipped and why, and which of those were caught by content rather than by
+    title/label/folder.
 - Ignore the AGENTSMEMORY page itself as a source; it is memory, not documentation.
 
 SPLIT THE WORK ACROSS SUBAGENTS, ONE PER TREE:
-- Once you have the in-scope page list, do not read it all yourself. Delegate each top-level branch
-  to its own subagent and work through them in parallel where the harness allows it. Page bodies
-  are the bulk of this run; keeping them out of your own context is what makes a large space
-  affordable.
+- Run PHASE 3.0 (stale/legacy exclusion) YOURSELF, before splitting anything — it works off
+  the page tree alone, which you already have, and doing it once here means no branch's page
+  list ever contains a page an archive-folder or label rule should have dropped.
+- Once you have the in-scope page list (post-3.0), do not read it all yourself. Delegate each
+  top-level branch to its own subagent and work through them in parallel where the harness
+  allows it. Page bodies are the bulk of this run; keeping them out of your own context is
+  what makes a large space affordable.
 - Assign every page to EXACTLY ONE branch, by its primary parent in the tree. A page reachable from
   two branches gets summarized twice otherwise, and the two summaries will not agree.
-- Each subagent inherits nothing from this prompt, so give it: its branch's page list, the depth
-  rules below, the classification rules, and PHASE 0's read-only contract restated in full. It is
-  bound by that contract exactly as you are.
+- Each subagent inherits nothing from this prompt, so give it: its branch's (already-filtered)
+  page list, the depth rules below, the classification rules including the per-page title check
+  and the content-based deprecation fallback (both from PHASE 3.0/the classification bullet —
+  restate them, since you already excluded folders/labels but a leaf can still self-flag by
+  title or by opening with a deprecation notice), and PHASE 0's read-only contract restated in full.
+  It is bound by that contract exactly as you are. Restate the "mechanical, not a judgment call"
+  rule explicitly too: a subagent that finds a title-marker match with technically rich subpages
+  must SKIP it exactly as PHASE 3.0 requires, not promote it to DOC on its own reasoning about the
+  content's value.
 - THE SUBAGENT WRITES ITS RESULT TO A FILE. Never ask it to return the entries in its reply. Give
   it a path — `.paul/init-<branch-id>.json`, beside memory.json — and tell it to write one JSON
   object there: { docs: [...], meetings: [...], skipped: [...] }, same field shapes paul_init
@@ -151,9 +220,16 @@ HOW DEEPLY TO READ — RECENCY APPLIES TO EVENTS, NOT TO STANDING DOCUMENTS:
     always get at least the two-sentence treatment, however old they are.
 - For DOC pages, do NOT weight by age. A decision nobody has had to revise in three years is the
   most load-bearing document in the space — "long untouched" is evidence of authority there, not
-  irrelevance. Weighting them by age would discard the foundation and keep the chatter. What
-  lowers a DOC's weight is being SUPERSEDED (a newer page decides the same question — say so in
-  both entries) or being visibly abandoned (explicitly marked draft/deprecated).
+  irrelevance. Weighting them by age would discard the foundation and keep the chatter. Explicitly
+  marked draft/deprecated is a SKIP now (PHASE 3.0 / the classification rule above), not a lower
+  weight — and that SKIP is unconditional: a page whose title/folder/label matches a stale marker
+  is excluded no matter how load-bearing its content looks, full stop. What still lowers weight
+  WITHOUT EXCLUDING THE PAGE is being SUPERSEDED by a newer page that decides the same question —
+  and this SUPERSEDED case applies ONLY to a page that does NOT itself match {{STALE_MARKERS}} or
+  {{STALE_LABELS}}. If a page matches a marker, it is governed by PHASE 3.0 alone: it is excluded,
+  never kept "for the history," regardless of how it compares to whatever superseded it. For the
+  genuinely non-marked superseded case: say so in both entries and keep the older one, since a
+  future session may still need that history.
 
 Jira — the project "{{JIRA_PROJECT}}"{{JIRA_SCOPE}}:
 - jira_search with jql: {{JIRA_JQL}}. This exact JQL, every time — it is what limits the run to the
@@ -216,14 +292,26 @@ Call paul_init ONCE with:
                 jiraExpected: <{{JIRA_EXPECTED}}, or your enumerated count if that reads "unknown">,
                 confluenceExpected: <pages IN SCOPE — the chosen trees and their descendants;
                                      equal to total_pages when no root is configured>,
-                skipped: [{ externalId, title, reason, source }] }
+                skipped: [{ externalId, title, reason, source, excludedCount }],
+                noLongerInScope: [{ externalId, title, reason }] }
     Every entry is upserted by externalId regardless of coverage — that dedup is unconditional, not
     something coverage unlocks. Coverage only lets the final report name a gap ("Jira reports 54,
     only 40 landed") so a human can go look, rather than that gap staying silent. Give it your best
     numbers; there is no downside to passing it and no ceremony required to get it right.
     Every page or issue you chose not to index goes in skipped[] with its reason ("template",
-    "space home", "empty stub", "the memory page itself") so the report can tell a deliberate skip
-    from something nobody looked at.
+    "space home", "empty stub", "the memory page itself", "archive folder (<n> pages excluded with
+    it)", "labeled <label>", "page states it is deprecated/superseded") so the report can tell a
+    deliberate skip — stale/legacy or otherwise — from something nobody looked at.
+    excludedCount MATTERS WHENEVER ONE ENTRY STANDS IN FOR MORE THAN ONE PAGE — a PHASE 3.0
+    folder/label rollup excluding N descendants must set excludedCount: N on that single entry
+    (in ADDITION to naming N in the reason string; the tool reads the field, not the prose). Omit
+    it for an ordinary single-page skip, where it defaults to 1. Getting this wrong makes a
+    correctly-excluded archive folder look like a coverage gap: the math below subtracts
+    excludedCount from confluenceExpected, so a folder reported as "1 entry" instead of
+    "excludedCount: 24" leaves 23 pages falsely flagged as unaccounted for.
+    noLongerInScope is separate and PURELY INFORMATIONAL: an already-indexed entry whose
+    title/labels now match a stale rule, reported so a human can see it moved or got relabeled —
+    the entry itself is left exactly as it was, never removed or edited by this run.
 {{MODE}}
 Ticket `order` (lower = higher on the board): rank by priority first (Critical < High < Medium <
 Low), then by complexity/estimate as a tiebreak, respecting stated dependencies. Assign ascending
@@ -249,8 +337,14 @@ EXPLICIT NON-GOALS — do not do these even though they may look helpful:
   you compute lives in PAUL memory only.
 - Do NOT create, edit, tidy or comment on any Confluence page other than AGENTSMEMORY.
 - Do NOT upload page content anywhere. Your summaries are the artifact.
+- Do NOT call paul_remove on any doc or meeting entry because it newly matches a stale/legacy
+  rule. Stale-exclusion controls what gets read and refreshed going forward, never what memory
+  already holds. Report it via coverage.noLongerInScope instead — see PHASE 3.0.
 
 FINISH by reporting, in plain text: how many docs, meetings and tickets you indexed, how many were
-new versus updated, which pages you skipped and why, the roadmap cursor you set, the coverage gaps
+new versus updated, which pages you skipped and why — separating stale/legacy exclusions
+(archive/deprecated by title, folder or label) from other skips like templates or empty stubs —
+how many previously-indexed entries newly match a stale rule and are therefore no longer refreshed
+(informational only — none were removed or edited), the roadmap cursor you set, the coverage gaps
 paul_init reported back (if any), and, explicitly, confirmation that the only write outside PAUL
-memory was the AGENTSMEMORY page.
+memory was the AGENTSMEMORY page, and that no existing entry was deleted.
