@@ -10,7 +10,8 @@ Atlassian I/O goes through the mcp-atlassian tools.
 PHASE 0 — THE READ-ONLY CONTRACT (this governs every later phase):
 
 You may READ anything:
-  confluence_search, confluence_get_page, confluence_get_page_children, confluence_get_comments,
+  confluence_get_space_page_tree, confluence_search, confluence_get_page,
+  confluence_get_page_children, confluence_get_comments,
   jira_search, jira_get_issue, jira_get_transitions.
 
 jira_get_project_issues is NOT on that list. It takes a project key, so it cannot honour the board
@@ -55,22 +56,26 @@ PHASE 2 — PEOPLE ARE ROLES, NEVER NAMES (before you write anything):
 PHASE 3 — READ THE DOCUMENTATION (read-only; PHASE 0 still applies):
 
 Confluence — the space "{{CONFLUENCE_SPACE}}":
-- confluence_search with cql: space = "{{CONFLUENCE_SPACE}}" AND type = page. Page through the
-  results until you have the whole space; do not stop at the first batch. RECORD THE TOTAL the
-  search reports — you must pass it to paul_init in PHASE 4, and it is what proves you reached
-  the end rather than stopping at a page boundary.
-- Documentation usually lives in TREES, not in single pages: an arc42 or architecture document is a
-  parent page whose real content sits in its children (and their children). For every page you keep,
-  call confluence_get_page_children and recurse to the leaves. A parent page that is only a table of
-  contents is still worth one entry, but the substance is in the subpages — index each subpage as
-  its own entry. If the search results look shallower than the trees you find, trust the trees.
-- For each page, compare its version number against the `meta.version` of the entry with the same
-  externalId from PHASE 1. If they match, the page has not changed since the last index: keep the
-  existing summary and do NOT fetch the body.
-- SEARCH RESULTS ARE NOT THE PAGE. confluence_search returns an excerpt — a truncated,
+- ENUMERATE THE SPACE WITH ONE CALL: confluence_get_space_page_tree(space_key="{{CONFLUENCE_SPACE}}",
+  limit=1000). It returns every page as { id, title, parent_id, position, depth } plus total_pages.
+  That list IS the space — it is what you index against, and total_pages is the confluenceExpected
+  you pass to paul_init. If the result carries has_more, say so in your final report.
+- Do NOT try to page confluence_search. It has no offset parameter at all — only query, limit
+  (1-50) and spaces_filter — so calling it again with different arguments returns the same first
+  batch and tells you nothing new. Use it for exactly one thing: finding the AGENTSMEMORY page by
+  title in PHASE 1.
+- Documentation lives in TREES, not in single pages: an arc42 or architecture document is a parent
+  page whose real content sits in its children. The page tree already gives you that structure via
+  parent_id and depth — you do not need confluence_get_page_children to rediscover it. A parent page
+  that is only a table of contents is still worth one entry, but the substance is in the subpages,
+  so index each subpage as its own entry with parentId/parentTitle set from the tree.
+- The page tree gives you ids and titles, not versions. So on an incremental run, call
+  confluence_get_page and compare the version it reports against the `meta.version` of the entry
+  with the same externalId from PHASE 1. If they match, the page has not changed since the last
+  index: keep the existing summary verbatim and move on without re-reading or re-summarizing it.
+- A SEARCH RESULT IS NOT THE PAGE. confluence_search returns an excerpt — a truncated,
   markup-stripped fragment. Summarizing from excerpts produces summaries that look specific and
-  are quietly wrong. Call confluence_get_page on every page you are going to index, and write its
-  summary from the body you got back.
+  are quietly wrong. Every page you index gets its summary from a confluence_get_page body.
 - Read the remaining pages with confluence_get_page. Classify each one:
   * MEETING — notes from a dated event: meeting notes, standup, retro, planning, review.
   * DOC — standing knowledge: architecture or feature spec, decision record, reference, runbook,
@@ -83,14 +88,23 @@ Jira — the project "{{JIRA_PROJECT}}"{{JIRA_SCOPE}}:
 - jira_search with jql: {{JIRA_JQL}}. This exact JQL, every time — it is what limits the run to the
   boards that were chosen. Do not call jira_get_project_issues and do not "simplify" the query to
   project = ... alone; either one pulls in tickets from boards this run is meant to leave out.
-- Page through all
-  results — the first call returns a page, not the project. RECORD THE TOTAL the search reports
-  and keep requesting the next page until you have that many issues. Use jira_get_issue where you
-  need the full description.
-- Newer Jira Cloud returns total: -1 instead of a count. When that happens, keep paginating until a
-  page comes back empty or short, and report jiraExpected as the number of issues you actually
-  enumerated — never a guess derived from the highest issue key, which counts issues that were
-  deleted or moved and manufactures a gap that does not exist.
+- HOW MANY THERE ARE: {{JIRA_EXPECTED}}. That is Jira's own count for this exact JQL. Unless it
+  reads "unknown", it is the target and it is what you pass as coverage.jiraExpected — do not
+  substitute a number you counted yourself.
+- Ask for the fields you need in the search itself:
+  fields: "summary,status,issuetype,priority,created,updated", limit: 100. One call returns up to
+  100 issues with everything the ticket entry needs except the description.
+- PAGINATE WITH page_token, NEVER WITH start_at. On Jira Cloud start_at is ignored — the search
+  runs against an endpoint that pages by token, so a second call with start_at: 50 returns THE SAME
+  first fifty issues. A loop that increments start_at therefore never ends, and every pass counts
+  the same tickets again, which is how a 130-ticket board gets reported as 300+. Instead: read
+  next_page_token off the result and pass it back as page_token on the next call. When the result
+  has no next_page_token, you have the whole set — that, not an empty page, is the end signal.
+- total in the response is -1 on Cloud and means "not reported". It is not a count, not an error,
+  and not a reason to keep searching.
+- Full descriptions: call jira_get_issue ONLY for issues whose mapped status is backlog, todo or
+  in_progress — those are the ones that get a spec in PHASE 4. Issues in review, blocked or done are
+  summarized from the search fields alone; do not spend a round trip on them.
 - Map each Jira status onto exactly one PAUL status: backlog | todo | in_progress | blocked |
   review | done.
 - Note the issue type (Task, Story, Bug, Epic) and the issue URL.
@@ -122,9 +136,10 @@ Call paul_init ONCE with:
                  order: <computed>, issueType: "<type>", url: "<issue url>", details: "<one line>" }]
   * cursorPhase / cursorNote: where the project stands right now, derived from what you read — the
     current phase or sprint, and one short note on the current focus and the next step.
-  * coverage: { jiraExpected: <the total the Jira search reported>,
-                confluenceExpected: <the total the Confluence search reported>,
-                complete: <true only if you really paginated to the end of both>,
+  * coverage: { jiraExpected: <{{JIRA_EXPECTED}}, or your enumerated count if that reads "unknown">,
+                confluenceExpected: <total_pages from the space page tree>,
+                complete: <true only if the Jira search ran out of next_page_token AND the page
+                           tree came back without has_more>,
                 skipped: [{ externalId, title, reason, source }] }
     Every page or issue you chose not to index goes in skipped[] with its reason ("template",
     "space home", "empty stub", "the memory page itself"). PAUL subtracts indexed + skipped from

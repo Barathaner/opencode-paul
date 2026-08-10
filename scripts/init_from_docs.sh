@@ -24,13 +24,21 @@
 # Usage:
 #   ./scripts/init_from_docs.sh                     # incremental index (safe to repeat)
 #   ./scripts/init_from_docs.sh --reset             # wipe memory and re-index from scratch
+#   ./scripts/init_from_docs.sh --count             # print how much is in scope, index nothing
 #   ./scripts/init_from_docs.sh --dry-run           # print the prompt, call nothing
 #   ./scripts/init_from_docs.sh --space KEY --project KEY
 #   ./scripts/init_from_docs.sh --board 12,21       # only what those boards show
 #   ./scripts/init_from_docs.sh --no-board          # the whole project, ignoring the config
+#   ./scripts/init_from_docs.sh --full-filter       # each board's whole saved filter
 #
 # By default it indexes the boards setup.sh selected (PAUL_JIRA_BOARDS); with none
 # selected, the whole Jira project.
+#
+# A BOARD'S SAVED FILTER IS NOT WHAT THE BOARD SHOWS. Its configuration carries two
+# queries: the saved filter (on a default Kanban board, `project = X` — every ticket the
+# project ever had) and a sub-filter that keeps finished work off the board. PAUL uses
+# both, so the index matches the board you are looking at. --full-filter opts out, and
+# --count tells you the difference before you spend an hour on it.
 #
 # All paths/keys are overridable via environment (defaults match process_meetings.sh):
 #   OPENCODE_BIN            path to the opencode binary
@@ -41,6 +49,7 @@
 #   PAUL_JIRA_PROJECT       Jira project key                           (KAN)
 #   PAUL_JIRA_BOARDS        board ids to index, comma-separated        (whole project)
 #   PAUL_JIRA_BOARD_FILTERS their saved-filter ids, from setup.sh      (resolved if unset)
+#   PAUL_JIRA_BOARD_SUBFILTERS their sub-filters, base64, one slot per filter id
 #   PAUL_AGENTSMEMORY_TITLE title of the shared memory page            (AGENTSMEMORY)
 #   PAUL_ROLES              comma-separated role vocabulary            (built-in defaults)
 #
@@ -84,6 +93,7 @@ paul_load_env() {
   if [ -z "$p" ]; then
     for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
              PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
+             PAUL_JIRA_BOARD_SUBFILTERS \
              PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
              PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
       [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
@@ -112,26 +122,38 @@ AGENTSMEMORY_TITLE="${PAUL_AGENTSMEMORY_TITLE:-AGENTSMEMORY}"
 # index follows whatever the board shows today instead of a JQL string copied once.
 JIRA_BOARDS="${PAUL_JIRA_BOARDS:-}"
 JIRA_BOARD_FILTERS="${PAUL_JIRA_BOARD_FILTERS:-}"
+JIRA_BOARD_SUBFILTERS="${PAUL_JIRA_BOARD_SUBFILTERS:-}"
 JIRA_BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}"
+
+# The JQL builder both renderers share, plus the two preflight counters.
+. "$REPO_DIR/scripts/lib/jira_scope.sh"
 
 # Exported so the PAUL tools running inside OpenCode see the role vocabulary.
 [ -n "${PAUL_ROLES:-}" ] && export PAUL_ROLES
 
 RESET=0
 DRY_RUN=0
+COUNT_ONLY=0
+FULL_FILTER=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --reset)    RESET=1; shift ;;
     --dry-run)  DRY_RUN=1; shift ;;
+    --count)    COUNT_ONLY=1; shift ;;
     --space)    CONFLUENCE_SPACE="${2:-}"; shift 2 ;;
     --project)  JIRA_PROJECT="${2:-}"; shift 2 ;;
-    # An explicit board list replaces the configured one, filters and names included,
-    # so they cannot describe a different board than the one being indexed.
+    # An explicit board list replaces the configured one, filters, sub-filters and names
+    # included, so they cannot describe a different board than the one being indexed.
     --board|--boards)
-                JIRA_BOARDS="${2:-}"; JIRA_BOARD_FILTERS=""; JIRA_BOARD_NAMES=""; shift 2 ;;
-    --no-board) JIRA_BOARDS=""; JIRA_BOARD_FILTERS=""; JIRA_BOARD_NAMES=""; shift ;;
-    -h|--help)  sed -n '2,46p' "$0"; exit 0 ;;
+                JIRA_BOARDS="${2:-}"; JIRA_BOARD_FILTERS=""; JIRA_BOARD_SUBFILTERS=""
+                JIRA_BOARD_NAMES=""; shift 2 ;;
+    --no-board) JIRA_BOARDS=""; JIRA_BOARD_FILTERS=""; JIRA_BOARD_SUBFILTERS=""
+                JIRA_BOARD_NAMES=""; shift ;;
+    # Index the board's whole saved filter — for a Kanban board, every ticket the project
+    # ever had, not the ~130 the board shows. Deliberate and slow, never the default.
+    --full-filter) FULL_FILTER=1; shift ;;
+    -h|--help)  sed -n '2,55p' "$0"; exit 0 ;;
     *)          echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -180,7 +202,7 @@ fi
 UNRESOLVED_BOARDS=""
 RESOLVE_BLOCKER=""
 resolve_board_filters() {
-  local id out f n base="${PAUL_JIRA_URL:-}"
+  local id out f n s subs="" nsubs=0 base="${PAUL_JIRA_URL:-}"
   base="${base%/}"
   [ -n "$JIRA_BOARDS" ] && [ -z "$JIRA_BOARD_FILTERS" ] || return 0
   if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
@@ -196,13 +218,22 @@ resolve_board_filters() {
       "$base/rest/agile/1.0/board/$id/configuration" 2>/dev/null)
     f=$(printf '%s' "$out" | jq -r '.filter.id // empty' 2>/dev/null)
     n=$(printf '%s' "$out" | jq -r '.name // empty' 2>/dev/null)
+    # The board's OTHER query. Without it the saved filter alone means the whole project
+    # on a default Kanban board — see scripts/lib/jira_scope.sh for why.
+    s=$(printf '%s' "$out" | jq -r '.subQuery.query // empty' 2>/dev/null)
     if [ -z "$f" ]; then
       UNRESOLVED_BOARDS="${UNRESOLVED_BOARDS:+$UNRESOLVED_BOARDS,}$id"
       continue
     fi
     JIRA_BOARD_FILTERS="${JIRA_BOARD_FILTERS:+$JIRA_BOARD_FILTERS,}$f"
+    # One slot per filter, always. A board with no sub-filter still occupies its slot —
+    # an empty slot that is skipped would shift every later board onto the wrong filter.
+    [ "$nsubs" -gt 0 ] && subs="$subs,"
+    subs="$subs$(paul_subfilter_encode "$s")"
+    nsubs=$((nsubs + 1))
     [ -n "$n" ] && JIRA_BOARD_NAMES="${JIRA_BOARD_NAMES:+$JIRA_BOARD_NAMES,}$n"
   done
+  JIRA_BOARD_SUBFILTERS="$subs"
 }
 resolve_board_filters
 
@@ -224,20 +255,31 @@ if [ -n "$UNRESOLVED_BOARDS" ]; then
 fi
 
 # The search the agent runs. Without a board scope this is the string PAUL always used.
-build_jql() {
-  local f clause=""
-  for f in $(printf '%s' "$JIRA_BOARD_FILTERS" | tr ',;' '  '); do
-    clause="${clause:+$clause OR }filter = $f"
-  done
-  if [ -n "$clause" ]; then
-    printf 'project = "%s" AND (%s) ORDER BY created DESC' "$JIRA_PROJECT" "$clause"
-  else
-    printf 'project = "%s" ORDER BY created DESC' "$JIRA_PROJECT"
-  fi
-}
-JIRA_JQL="$(build_jql)"
+# scripts/install_command.sh builds it from the same function, so the CLI run and the
+# /paul-init-docs command can never disagree about what is in scope.
+JIRA_JQL="$(paul_build_jql "$JIRA_PROJECT" "$JIRA_BOARD_FILTERS" "$JIRA_BOARD_SUBFILTERS" "$FULL_FILTER")"
+
+# How many issues that is. Jira Cloud's v3 search reports total: -1, so an agent counting
+# its own pages is the only number available to it — and a mis-paged read counts the same
+# issues twice. Ask Jira directly, log it, and hand it to the agent as its target.
+# --dry-run stays offline: it exists to show the rendered prompt, not to call anything.
+JIRA_EXPECTED="unknown"
+if [ "$DRY_RUN" -eq 0 ]; then
+  JIRA_EXPECTED="$(paul_jira_count "$JIRA_JQL")"
+  [ -n "$JIRA_EXPECTED" ] || JIRA_EXPECTED="unknown"
+fi
+
 JIRA_SCOPE=""
 [ -n "$JIRA_BOARD_FILTERS" ] && JIRA_SCOPE=", board(s) ${JIRA_BOARD_NAMES:-$JIRA_BOARDS}"
+
+if [ "$COUNT_ONLY" -eq 1 ]; then
+  CF_COUNT="$(paul_confluence_count "$CONFLUENCE_SPACE")"
+  echo "Jira    ${JIRA_PROJECT}${JIRA_SCOPE}: ${JIRA_EXPECTED} issues in scope"
+  echo "        $JIRA_JQL"
+  echo "Confluence ${CONFLUENCE_SPACE}: ${CF_COUNT:-unknown} pages"
+  echo "(nothing was indexed — drop --count to run the index)"
+  exit 0
+fi
 # awk's gsub() reads & in the replacement as "the text that matched", so a board
 # named "R&D" would otherwise render as the placeholder it replaced.
 JIRA_SCOPE="${JIRA_SCOPE//&/\\&}"
@@ -249,6 +291,7 @@ render_prompt() {
       -v memtitle="$AGENTSMEMORY_TITLE" \
       -v jql="$JIRA_JQL" \
       -v scope="$JIRA_SCOPE" \
+      -v expected="$JIRA_EXPECTED" \
       -v mode="$MODE_LINE" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
@@ -256,6 +299,7 @@ render_prompt() {
       gsub(/\{\{AGENTSMEMORY_TITLE\}\}/, memtitle)
       gsub(/\{\{JIRA_JQL\}\}/, jql)
       gsub(/\{\{JIRA_SCOPE\}\}/, scope)
+      gsub(/\{\{JIRA_EXPECTED\}\}/, expected)
       if ($0 ~ /\{\{MODE\}\}/) { print mode; next }
       print
     }
@@ -265,7 +309,10 @@ render_prompt() {
 PROMPT="$(render_prompt)"
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "--- DRY RUN: rendered prompt (space=$CONFLUENCE_SPACE project=$JIRA_PROJECT boards=${JIRA_BOARDS:-none} filters=${JIRA_BOARD_FILTERS:-none} reset=$RESET) ---"
+  if [ -n "$FULL_FILTER" ]; then SUB_STATE="ignored (--full-filter)"
+  elif [ -n "$JIRA_BOARD_SUBFILTERS" ]; then SUB_STATE="applied"
+  else SUB_STATE="none"; fi
+  echo "--- DRY RUN: rendered prompt (space=$CONFLUENCE_SPACE project=$JIRA_PROJECT boards=${JIRA_BOARDS:-none} filters=${JIRA_BOARD_FILTERS:-none} sub-filters=$SUB_STATE reset=$RESET) ---"
   echo "$PROMPT"
   echo "--- DRY RUN: nothing was called, nothing was written ---"
   exit 0
@@ -282,12 +329,22 @@ fi
 # Name the filter ids, not just the board names: the filters are what the JQL actually
 # carries, so this line can never claim a scope the search does not have.
 if [ -n "$JIRA_BOARD_FILTERS" ]; then
-  SCOPE_LINE="boards: ${JIRA_BOARD_NAMES:-$JIRA_BOARDS} (filters $JIRA_BOARD_FILTERS)"
+  SCOPE_LINE="boards: ${JIRA_BOARD_NAMES:-$JIRA_BOARDS} (filters $JIRA_BOARD_FILTERS"
+  if [ -n "$FULL_FILTER" ]; then
+    SCOPE_LINE="$SCOPE_LINE, sub-filters IGNORED via --full-filter)"
+  elif [ -n "$(printf '%s' "$JIRA_BOARD_SUBFILTERS" | tr -d ',')" ]; then
+    SCOPE_LINE="$SCOPE_LINE + board sub-filters)"
+  else
+    SCOPE_LINE="$SCOPE_LINE, no sub-filter on these boards)"
+  fi
 else
   SCOPE_LINE="boards: none — the WHOLE project"
 fi
 log "Space: $CONFLUENCE_SPACE | Jira project: $JIRA_PROJECT | $SCOPE_LINE | reset: $RESET"
 log "Jira search: $JIRA_JQL"
+# The scope size, before anything reads anything: a wrong scope is visible here in seconds
+# instead of an hour later in a ticket count nobody can explain.
+log "Jira scope: $JIRA_EXPECTED issues match that search"
 log "PAUL store: $PROJECT_DIR/.paul/memory.json"
 log "Read-only: no Jira issue and no Confluence page other than $AGENTSMEMORY_TITLE will be written."
 log "Invoking OpenCode CLI ($OPENCODE_BIN)..."

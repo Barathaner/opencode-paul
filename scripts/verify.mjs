@@ -383,9 +383,9 @@ const FORBIDDEN = ["jira_create_issue", "jira_update_issue", "jira_transition_is
   "confluence_create_page", "confluence_update_page", "confluence_delete_page"]
 ok(FORBIDDEN.every((t) => prompt.includes(t)),
   "init_from_docs: every write tool is named in the read-only contract")
-ok(prompt.includes("paul_init") && prompt.includes("docs:") && prompt.includes("confluence_get_page_children"),
-  "init_from_docs: prompt persists via paul_init docs[] and walks page trees")
-ok(["{{CONFLUENCE_SPACE}}", "{{JIRA_PROJECT}}", "{{AGENTSMEMORY_TITLE}}", "{{MODE}}"]
+ok(prompt.includes("paul_init") && prompt.includes("docs:") && prompt.includes("confluence_get_space_page_tree"),
+  "init_from_docs: prompt persists via paul_init docs[] and takes the page tree in one call")
+ok(["{{CONFLUENCE_SPACE}}", "{{JIRA_PROJECT}}", "{{AGENTSMEMORY_TITLE}}", "{{MODE}}", "{{JIRA_EXPECTED}}"]
   .every((p) => prompt.includes(p)), "init_from_docs: all placeholders present for the renderers")
 
 const canRun = (p) => { try { accessSync(REPO + p, constants.X_OK); return true } catch { return false } }
@@ -482,8 +482,10 @@ ok(/rankCustomFieldId\\?": %s/.test(reorder) && reorder.includes('f="${f#customf
 const renderers = ["scripts/init_from_docs.sh", "scripts/install_command.sh"]
   .map((f) => readFileSync(REPO + f, "utf8"))
 ok(renderers.every((s) => /JIRA_JQL\\\}\\\}/.test(s) && /JIRA_SCOPE\\\}\\\}/.test(s)
-   && s.includes("filter = ")),
-  "both prompt renderers scope the Jira search to the selected boards' filters")
+   && /paul_build_jql/.test(s) && /lib\/jira_scope\.sh/.test(s)),
+  "both prompt renderers scope the Jira search through the one shared JQL builder")
+ok(renderers.every((s) => /JIRA_EXPECTED\\\}\\\}/.test(s)),
+  "both prompt renderers fill in the expected issue count (the agent never has to guess it)")
 ok(prompt.includes("{{JIRA_JQL}}") && !prompt.includes("ORDER BY created DESC. Page"),
   "init_from_docs prompt takes its JQL from the renderer instead of hardcoding the project")
 
@@ -501,6 +503,34 @@ ok(/UNRESOLVED_BOARDS/.test(initSh) && /are NOT included in this index/.test(ini
   "init_from_docs.sh names the boards it could not resolve instead of dropping them silently")
 ok(/log "Jira search: \$JIRA_JQL"/.test(initSh),
   "init_from_docs.sh logs the JQL it actually runs, so the log cannot overstate the scope")
+
+// A board's saved filter is the WHOLE project on a default Kanban board; the sub-filter is
+// what the board actually shows. Reading only the filter turns a 130-ticket board into a
+// 300-ticket read that then reports a coverage gap nobody can explain.
+ok(/subQuery\.query/.test(initSh) && /subQuery\.query/.test(setup),
+  "both board resolvers read .subQuery.query, not just .filter.id")
+ok(setup.includes("PAUL_JIRA_BOARD_SUBFILTERS") && initSh.includes("PAUL_JIRA_BOARD_SUBFILTERS"),
+  "the board sub-filters survive setup.sh into every later run")
+const scopeLib = readFileSync(REPO + "scripts/lib/jira_scope.sh", "utf8")
+ok(/filter = \$f AND \(\$sub\)/.test(scopeLib) && /\$full/.test(scopeLib),
+  "the shared builder ANDs each board's sub-filter onto its filter, and --full-filter drops it")
+ok(/--full-filter/.test(initSh) && /--count/.test(initSh),
+  "init_from_docs.sh offers --full-filter (whole saved filter) and --count (scope preview)")
+ok(/search\/approximate-count/.test(scopeLib) && /log "Jira scope: \$JIRA_EXPECTED/.test(initSh),
+  "init_from_docs.sh asks Jira how many issues are in scope and logs it before reading anything")
+
+// Jira Cloud's v3 search pages by token and ignores start_at, so a start_at loop re-reads
+// page one forever and counts the same issues on every pass.
+ok(/PAGINATE WITH page_token, NEVER WITH start_at/.test(prompt)
+   && /next_page_token/.test(prompt),
+  "init_from_docs prompt pages Jira by page_token (a start_at loop never terminates)")
+// confluence_search has no offset parameter at all, so "page through the results" is not
+// something that tool can do.
+ok(/Do NOT try to page confluence_search/.test(prompt)
+   && /confluence_get_space_page_tree\(space_key=/.test(prompt),
+  "init_from_docs prompt enumerates Confluence via the page tree, not by paging search")
+ok(/jira_get_issue ONLY for issues whose mapped status is backlog, todo or\s+in_progress/.test(prompt),
+  "init_from_docs prompt fetches full issues only for the tickets that get a spec")
 
 // AGENTS.md is what the model actually reads. It used to be written once and skipped on
 // every re-run, with the default keys baked in — so paul.env said one project and the

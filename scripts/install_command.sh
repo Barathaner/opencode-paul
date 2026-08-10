@@ -11,9 +11,10 @@
 #   ./scripts/install_command.sh [SPACE_KEY] [JIRA_PROJECT] [AGENTSMEMORY_TITLE] [BOARD_FILTER_IDS]
 #
 # Values fall back to PAUL_CONFLUENCE_SPACE / PAUL_JIRA_PROJECT / PAUL_AGENTSMEMORY_TITLE /
-# PAUL_JIRA_BOARD_FILTERS (written to ~/.config/opencode/paul.env by setup.sh), then to the
-# built-in defaults. The board filter ids narrow the command's Jira search to the boards you
-# picked during setup, matching what scripts/init_from_docs.sh indexes from the CLI.
+# PAUL_JIRA_BOARD_FILTERS + PAUL_JIRA_BOARD_SUBFILTERS (written to ~/.config/opencode/paul.env
+# by setup.sh), then to the built-in defaults. The filter ids plus each board's sub-filter
+# narrow the command's Jira search to what those boards actually show, matching what
+# scripts/init_from_docs.sh indexes from the CLI.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,28 +24,28 @@ SPACE="${1:-${PAUL_CONFLUENCE_SPACE:-${CONFLUENCE_SPACE:-SOFTWAREEN}}}"
 PROJECT="${2:-${PAUL_JIRA_PROJECT:-${JIRA_PROJECT:-KAN}}}"
 MEM_TITLE="${3:-${PAUL_AGENTSMEMORY_TITLE:-AGENTSMEMORY}}"
 BOARD_FILTERS="${4:-${PAUL_JIRA_BOARD_FILTERS:-}}"
+BOARD_SUBFILTERS="${PAUL_JIRA_BOARD_SUBFILTERS:-}"
 BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}"
 
-# Same search scripts/init_from_docs.sh builds: `filter = <id>` is resolved by Jira at
-# query time, so the command follows the board instead of freezing a copied JQL string.
-CLAUSE=""
-for f in $(printf '%s' "$BOARD_FILTERS" | tr ',;' '  '); do
-  CLAUSE="${CLAUSE:+$CLAUSE OR }filter = $f"
-done
-if [ -n "$CLAUSE" ]; then
-  JQL="project = \"$PROJECT\" AND ($CLAUSE) ORDER BY created DESC"
+# Same search scripts/init_from_docs.sh builds, from the same function: `filter = <id>`
+# and the board's sub-filter are both resolved by Jira at query time, so the command
+# follows the board instead of freezing a copied JQL string.
+. "$REPO_DIR/scripts/lib/jira_scope.sh"
+JQL="$(paul_build_jql "$PROJECT" "$BOARD_FILTERS" "$BOARD_SUBFILTERS")"
+if [ -n "$BOARD_FILTERS" ]; then
   SCOPE=", board(s) ${BOARD_NAMES:-selected during setup}"
 else
-  JQL="project = \"$PROJECT\" ORDER BY created DESC"
   SCOPE=""
 fi
+
+# setup.sh renders the AGENTS.md block from the same search, and a second copy of this
+# clause is a second place for it to drift. PRINT_JQL=1 hands it over instead — before
+# the awk escaping below, which is a detail of this file's renderer and nobody else's.
+if [ "${PRINT_JQL:-0}" = "1" ]; then printf '%s\n' "$JQL"; exit 0; fi
+
 # awk's gsub() reads & in the replacement as the matched text.
 JQL="${JQL//&/\\&}"
 SCOPE="${SCOPE//&/\\&}"
-
-# setup.sh renders the AGENTS.md block from the same search, and a second copy of this
-# clause is a second place for it to drift. PRINT_JQL=1 hands it over instead.
-if [ "${PRINT_JQL:-0}" = "1" ]; then printf '%s\n' "$JQL"; exit 0; fi
 
 # A profile installs its own command, so two PAULs give you /paul-init-docs-a and
 # /paul-init-docs-b instead of one overwriting the other. No profile = the old name.
@@ -79,14 +80,17 @@ project key, or the word "reset" for a full re-index: \$ARGUMENTS
 
 FRONTMATTER
 
+  # No preflight count here: a slash command runs inside someone's session, with no shell
+  # to curl from. "unknown" tells the agent to trust its own enumeration instead.
   awk -v space="$SPACE" -v project="$PROJECT" -v memtitle="$MEM_TITLE" \
-      -v jql="$JQL" -v scope="$SCOPE" -v mode="$MODE_LINE" '
+      -v jql="$JQL" -v scope="$SCOPE" -v mode="$MODE_LINE" -v expected="unknown" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
       gsub(/\{\{JIRA_PROJECT\}\}/, project)
       gsub(/\{\{AGENTSMEMORY_TITLE\}\}/, memtitle)
       gsub(/\{\{JIRA_JQL\}\}/, jql)
       gsub(/\{\{JIRA_SCOPE\}\}/, scope)
+      gsub(/\{\{JIRA_EXPECTED\}\}/, expected)
       if ($0 ~ /\{\{MODE\}\}/) { print mode; next }
       print
     }

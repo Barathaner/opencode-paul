@@ -77,6 +77,7 @@ paul_load_env() {
   if [ -z "$p" ]; then
     for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
              PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
+             PAUL_JIRA_BOARD_SUBFILTERS \
              PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
              PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
       [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"

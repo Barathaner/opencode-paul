@@ -172,6 +172,7 @@ if [ -f "$SECRETS" ]; then
            ATLASSIAN_API_TOKEN="${!TOKEN_VAR:-${ATLASSIAN_API_TOKEN:-}}"
            for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
                     PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
+                    PAUL_JIRA_BOARD_SUBFILTERS \
                     PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
                     PAUL_PROTECTED_TERMS; do
              printf 'STORED_%s=%q\n' "$v" "${!v-}"
@@ -361,6 +362,11 @@ check_exists CONFLUENCE_SPACE "$CONFLUENCE_URL/rest/api/space/%s" "Confluence sp
 JIRA_BOARDS="${JIRA_BOARDS:-${STORED_PAUL_JIRA_BOARDS:-}}"
 JIRA_BOARD_NAMES=""
 JIRA_BOARD_FILTERS=""
+JIRA_BOARD_SUBFILTERS=""
+NSUBS=0
+# paul_subfilter_encode: the sub-filters are arbitrary JQL, so they travel base64-encoded
+# in a list that lines up slot-for-slot with JIRA_BOARD_FILTERS.
+. "$REPO_DIR/scripts/lib/jira_scope.sh"
 
 # All boards of the project as [{id,name,type}], paginating until isLast.
 fetch_boards() {
@@ -481,7 +487,17 @@ if [ -n "$JIRA_BOARDS" ] && [ -n "$BOARDS_JSON" ]; then
     CFG_CODE=$(api_code "$JIRA_URL/rest/agile/1.0/board/$id/configuration" "$RESP")
     if [ "$CFG_CODE" = "200" ]; then
       FID=$(jq -r '.filter.id // empty' "$RESP" 2>/dev/null)
-      [ -n "$FID" ] && JIRA_BOARD_FILTERS="${JIRA_BOARD_FILTERS:+$JIRA_BOARD_FILTERS,}$FID"
+      # The board's SECOND query. A Kanban board's saved filter is usually the whole
+      # project; the sub-filter is what keeps years of Done tickets off the board. Index
+      # on the filter alone and a 130-ticket board reads as 300+.
+      SUBQ=$(jq -r '.subQuery.query // empty' "$RESP" 2>/dev/null)
+      if [ -n "$FID" ]; then
+        JIRA_BOARD_FILTERS="${JIRA_BOARD_FILTERS:+$JIRA_BOARD_FILTERS,}$FID"
+        # One slot per filter id, in the same order, empty slots included.
+        [ "$NSUBS" -gt 0 ] && JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS,"
+        JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS$(paul_subfilter_encode "$SUBQ")"
+        NSUBS=$((NSUBS + 1))
+      fi
     else
       warn "could not read board $id configuration (HTTP $CFG_CODE) — it will not narrow the doc index"
     fi
@@ -550,6 +566,9 @@ export PAUL_CONFLUENCE_SPACE="$CONFLUENCE_SPACE"
 export PAUL_JIRA_BOARDS="$JIRA_BOARDS"
 export PAUL_JIRA_BOARD_NAMES="$JIRA_BOARD_NAMES"
 export PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS"
+# Each board's sub-filter, base64, one slot per filter id above. A Kanban board's saved
+# filter is usually the whole project; this second query is what the board actually shows.
+export PAUL_JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS"
 
 # --- Behaviour switches -------------------------------------------------------
 # EDIT THESE HERE. Every PAUL script reads this file, and re-running setup.sh
@@ -587,6 +606,7 @@ export PAUL_CONFLUENCE_SPACE="$CONFLUENCE_SPACE"
 export PAUL_JIRA_BOARDS="$JIRA_BOARDS"
 export PAUL_JIRA_BOARD_NAMES="$JIRA_BOARD_NAMES"
 export PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS"
+export PAUL_JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS"
 export PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS
 
 # 5b. merge opencode.json non-destructively (backup first).
@@ -638,6 +658,7 @@ AGENTS="$OPENCODE_DIR/AGENTS.md"
 
 # One source of truth for the search — the same script that renders /paul-init-docs.
 AGENTS_JQL="$(PRINT_JQL=1 PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS" \
+  PAUL_JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS" \
   "$REPO_DIR/scripts/install_command.sh" "$CONFLUENCE_SPACE" "$JIRA_PROJECT" 2>/dev/null)"
 [ -n "$AGENTS_JQL" ] || AGENTS_JQL="project = \"$JIRA_PROJECT\" ORDER BY created DESC"
 
@@ -681,6 +702,7 @@ fi
 # 5c-2. install the /paul-init-docs command (bootstrap memory from existing docs).
 if [ -x "$REPO_DIR/scripts/install_command.sh" ]; then
   if PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS" PAUL_JIRA_BOARD_NAMES="$JIRA_BOARD_NAMES" \
+       PAUL_JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS" \
        PAUL_PROFILE="$PAUL_PROFILE" \
        "$REPO_DIR/scripts/install_command.sh" "$CONFLUENCE_SPACE" "$JIRA_PROJECT" >/dev/null 2>&1; then
     ok "installed /$CMD_NAME command ${DIM}(space $CONFLUENCE_SPACE, project $JIRA_PROJECT${JIRA_BOARD_NAMES:+, boards $JIRA_BOARD_NAMES})${RST}"

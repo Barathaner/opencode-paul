@@ -387,6 +387,15 @@ PAUL should use; the answer scopes both the board reorder and what `/paul-init-d
 `none` (or leave `PAUL_JIRA_BOARDS` empty) to work on the whole project. Re-run `setup.sh` to change
 the selection — it re-reads the list from Jira and offers your current pick as the default.
 
+A board's configuration carries **two** queries, and PAUL needs both. The saved filter
+(`PAUL_JIRA_BOARD_FILTERS`) on a default Kanban board is just `project = X` — every ticket the
+project ever had. What you actually see on the board is that filter minus its *sub-filter*
+(`PAUL_JIRA_BOARD_SUBFILTERS`, typically `status != Done OR updated >= -14d`), which keeps finished
+work off the board. Indexing on the saved filter alone is how a board showing 130 tickets turns into
+a 300-ticket read. `setup.sh` stores both, and the index applies both. `--full-filter` opts back out
+to the whole saved filter; `./scripts/init_from_docs.sh --count` prints how many issues each choice
+means before you spend the time.
+
 `setup.sh` asks every question on every interactive run, including the API token, so rotating a
 token or moving to another site is just a re-run. Presets in the environment become the prompt
 default (Enter keeps them); use `NONINTERACTIVE=1` to answer entirely from the environment.
