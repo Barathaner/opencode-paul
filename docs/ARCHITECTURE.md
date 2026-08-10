@@ -150,8 +150,8 @@ sequenceDiagram
     Agent->>PAUL: paul_list() / paul_cursor()
 
     Note over Agent,PAUL: PHASE 0.5 — people are roles
-    Agent->>PAUL: paul_roles() [read vocabulary]
-    Agent->>PAUL: paul_roles({people: [...]}) [register aliases -> roles]
+    Agent->>PAUL: paul_roles() (read vocabulary)
+    Agent->>PAUL: paul_roles({people: [...]}) (register aliases -> roles)
 
     Note over Agent,Conf: PHASE 1 — meeting notes page
     Agent->>Conf: confluence_search / create parent "Meeting Notes" folder (if missing)
@@ -159,7 +159,7 @@ sequenceDiagram
     Agent->>Conf: confluence_create_page("Meeting Notes: <date>")
 
     Note over Agent,PAUL: PHASE 2 — action items -> Jira (per item)
-    Agent->>PAUL: paul_list(type="doc") [once; background candidates]
+    Agent->>PAUL: paul_list(type="doc") - once; background candidates
     loop Each action item
         Agent->>Agent: build TicketSpec (context, background<=3, goal,<br/>approach, acceptanceCriteria, ...)
         Agent->>PAUL: paul_ticket_body(spec)
@@ -177,7 +177,7 @@ sequenceDiagram
     Note over Agent,Conf: PHASE 4 — push memory
     Agent->>PAUL: paul_export_page()
     PAUL-->>Agent: {bodyPath}
-    Agent->>Conf: confluence_update_page(AGENTSMEMORY, body) [or create + paul_remote]
+    Agent->>Conf: confluence_update_page(AGENTSMEMORY, body) (or create + paul_remote)
 
     Agent-->>Script: exit 0
     Script->>Script: record file hash in processed_files.csv
