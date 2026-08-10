@@ -52,7 +52,9 @@ PHASE 3 — READ THE DOCUMENTATION (read-only; PHASE 0 still applies):
 
 Confluence — the space "{{CONFLUENCE_SPACE}}":
 - confluence_search with cql: space = "{{CONFLUENCE_SPACE}}" AND type = page. Page through the
-  results until you have the whole space; do not stop at the first batch.
+  results until you have the whole space; do not stop at the first batch. RECORD THE TOTAL the
+  search reports — you must pass it to paul_init in PHASE 4, and it is what proves you reached
+  the end rather than stopping at a page boundary.
 - Documentation usually lives in TREES, not in single pages: an arc42 or architecture document is a
   parent page whose real content sits in its children (and their children). For every page you keep,
   call confluence_get_page_children and recurse to the leaves. A parent page that is only a table of
@@ -75,7 +77,9 @@ Confluence — the space "{{CONFLUENCE_SPACE}}":
 
 Jira — the project "{{JIRA_PROJECT}}":
 - jira_search with jql: project = "{{JIRA_PROJECT}}" ORDER BY created DESC. Page through all
-  results. Use jira_get_issue where you need the full description.
+  results — the first call returns a page, not the project. RECORD THE TOTAL the search reports
+  and keep requesting the next page until you have that many issues. Use jira_get_issue where you
+  need the full description.
 - Map each Jira status onto exactly one PAUL status: backlog | todo | in_progress | blocked |
   review | done.
 - Note the issue type (Task, Story, Bug, Epic) and the issue URL.
@@ -107,6 +111,19 @@ Call paul_init ONCE with:
                  order: <computed>, issueType: "<type>", url: "<issue url>", details: "<one line>" }]
   * cursorPhase / cursorNote: where the project stands right now, derived from what you read — the
     current phase or sprint, and one short note on the current focus and the next step.
+  * coverage: { jiraExpected: <the total the Jira search reported>,
+                confluenceExpected: <the total the Confluence search reported>,
+                complete: <true only if you really paginated to the end of both>,
+                skipped: [{ externalId, title, reason, source }] }
+    Every page or issue you chose not to index goes in skipped[] with its reason ("template",
+    "space home", "empty stub", "the memory page itself"). PAUL subtracts indexed + skipped from
+    the expected total and records whatever is left over as a gap.
+
+COVERAGE IS NOT A FORMALITY. PAUL's promise is that it will not create a ticket that already
+exists, and it checks that against what it has indexed. An issue you never read looks new, so it
+gets duplicated. Do not guess the totals, do not set complete: true because the run felt thorough,
+and do not quietly drop the pages that looked boring — list them in skipped[] with a reason. A
+declared gap is fine. A silent one is what causes duplicate tickets weeks later.
 {{MODE}}
 Ticket `order` (lower = higher on the board): rank by priority first (Critical < High < Medium <
 Low), then by complexity/estimate as a tiebreak, respecting stated dependencies. Assign ascending
@@ -134,5 +151,6 @@ EXPLICIT NON-GOALS — do not do these even though they may look helpful:
 - Do NOT upload page content anywhere. Your summaries are the artifact.
 
 FINISH by reporting, in plain text: how many docs, meetings and tickets you indexed, how many were
-new versus updated, which pages you skipped and why, the roadmap cursor you set, and — explicitly —
-confirmation that the only write outside PAUL memory was the AGENTSMEMORY page.
+new versus updated, which pages you skipped and why, the roadmap cursor you set, the coverage
+paul_init reported back — including any gaps it found and anything it marked stale — and,
+explicitly, confirmation that the only write outside PAUL memory was the AGENTSMEMORY page.

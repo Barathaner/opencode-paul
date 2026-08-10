@@ -55,6 +55,24 @@ type TicketSpec = {
   specVersion?: number
 }
 
+/**
+ * What the last index actually saw.
+ *
+ * PAUL's promise — "do not create a ticket that already exists" — is only as good
+ * as its coverage: an issue it never read looks new, and gets duplicated. So an
+ * index records how many items the source reported against how many landed in the
+ * store, and which ones were skipped on purpose. A gap is data, not an error, but
+ * it must be visible rather than silent.
+ */
+type Coverage = {
+  checkedAt: string
+  complete: boolean          // caller asserted full coverage AND no gap was found
+  jira?: { expected?: number; indexed: number; skipped: number }
+  confluence?: { expected?: number; indexed: number; skipped: number }
+  skipped?: { externalId: string; title?: string; reason: string; source?: string }[]
+  gaps?: string[]            // human-readable description of every unexplained difference
+}
+
 type Store = {
   version: number
   project: string
@@ -62,6 +80,7 @@ type Store = {
   entries: Entry[]
   remote?: { pageId?: string; spaceKey?: string; title?: string; lastSync?: string }  // Confluence AGENTSMEMORY page
   roles?: string[]        // role vocabulary in use — role strings only, NEVER a person's name
+  coverage?: Coverage     // what the last paul_init actually managed to see
   updatedAt: string
 }
 
@@ -165,6 +184,67 @@ function escapeRe(s: string): string {
 }
 
 /**
+ * Terms the scrub must never rewrite.
+ *
+ * A person's alias is often also a product, a vendor or an ordinary word: with
+ * someone called Paul on the team, "Paul memory" became "Full-stack Developer
+ * memory", and "Carl Zeiss" became "Stakeholder Zeiss". Protected terms are
+ * masked before the roster runs and restored afterwards, so the longer, more
+ * specific phrase always wins over a bare first name.
+ *
+ * Extend for your project with PAUL_PROTECTED_TERMS (comma-separated).
+ */
+const DEFAULT_PROTECTED_TERMS = [
+  "PAUL", "Paul memory", "AGENTSMEMORY", "OpenCode", "Confluence", "Jira", "Atlassian",
+]
+
+function protectedTerms(): string[] {
+  const env = (process.env.PAUL_PROTECTED_TERMS || "").split(",").map((t) => t.trim()).filter(Boolean)
+  // Longest first: "Paul memory" must be masked before anything shorter inside it.
+  return [...DEFAULT_PROTECTED_TERMS, ...env].sort((a, b) => b.length - a.length)
+}
+
+/** Replace protected terms with placeholders that contain no alias text. */
+function maskProtected(text: string): { text: string; restore: (s: string) => string } {
+  const found: string[] = []
+  let out = text
+  for (const term of protectedTerms()) {
+    const re = new RegExp(`(^|[^\\w])${escapeRe(term)}(?![\\w])`, "g")
+    if (!re.test(out)) continue
+    re.lastIndex = 0
+    const token = ` PAULPROT${found.length} `
+    found.push(term)
+    out = out.replace(re, (_m, pre) => `${pre}${token}`)
+  }
+  if (!found.length) return { text: out, restore: (s) => s }
+  return {
+    text: out,
+    restore: (s) => found.reduce((acc, term, i) => acc.split(` PAULPROT${i} `).join(term), s),
+  }
+}
+
+/**
+ * Aliases that will damage ordinary text if registered.
+ *
+ * Returned as warnings rather than rejected: a nickname that is also a common
+ * word may still be the only way someone is referred to in a transcript, and
+ * leaking a name is worse than mangling a sentence. The caller gets to see the
+ * trade rather than discovering it in a published page.
+ */
+function aliasWarnings(alias: string): string[] {
+  const w: string[] = []
+  if (alias.length <= 3) {
+    w.push(`"${alias}" is very short — it will rewrite any standalone occurrence of those letters`)
+  }
+  const clash = protectedTerms().find((t) => t.toLowerCase() === alias.toLowerCase())
+  if (clash) w.push(`"${alias}" collides with the protected term "${clash}" — that term stays intact, the rest is rewritten`)
+  if (/^[a-z]/.test(alias)) {
+    w.push(`"${alias}" starts lowercase — the scrub is case-sensitive and will not match a capitalised spelling`)
+  }
+  return w
+}
+
+/**
  * Replace every registered alias with its role.
  *
  * Longest alias first, so "Karl Jahnel" wins over "Karl". Case-sensitive and
@@ -181,7 +261,10 @@ function scrubNames(text: string, roster: Roster): { text: string; replaced: str
   }
   pairs.sort((a, b) => b.alias.length - a.alias.length)
 
-  let out = text
+  // Product names, vendors and the like are masked first, so an alias that also
+  // happens to be one of them cannot corrupt it.
+  const masked = maskProtected(text)
+  let out = masked.text
   const replaced: string[] = []
   for (const { alias, role } of pairs) {
     const re = new RegExp(`(^|[^\\w])${escapeRe(alias)}(['’]s|s)?(?![\\w])`, "g")
@@ -190,7 +273,7 @@ function scrubNames(text: string, roster: Roster): { text: string; replaced: str
     out = out.replace(re, (_m, pre, suffix) => `${pre}${role}${suffix || ""}`)
     replaced.push(`${alias} → ${role}`)
   }
-  return { text: out, replaced }
+  return { text: masked.restore(out), replaced }
 }
 
 /** Scrub every string inside a value, recursing through arrays and objects. */
@@ -218,11 +301,15 @@ export const list = tool({
   description:
     "List PAUL project-memory entries (roadmap/ticket/milestone state) for the current project, " +
     "sorted by 'order'. Read this at the start of work to know where the project stands. " +
-    "Optionally filter by type, status, or tag. Also returns the roadmap cursor (current phase).",
+    "Optionally filter by type, status, or tag. Also returns the roadmap cursor (current phase) and " +
+    "the coverage of the last index — if coverage reports gaps, this list is NOT the whole project " +
+    "and you must not conclude from it that something does not exist yet.",
   args: {
     type: S.string().optional().describe("Filter by entry type, e.g. ticket, epic, milestone, blocker"),
     status: S.string().optional().describe("Filter by status, e.g. todo, in_progress, blocked, done"),
     tag: S.string().optional().describe("Filter to entries containing this tag"),
+    stale: S.boolean().optional().describe(
+      "true = only entries the last complete index no longer found; false = exclude them"),
   },
   async execute(args, ctx) {
     const store = load(storePath(ctx as any))
@@ -230,8 +317,15 @@ export const list = tool({
     if (args.type) entries = entries.filter((e) => e.type === args.type)
     if (args.status) entries = entries.filter((e) => e.status === args.status)
     if (args.tag) entries = entries.filter((e) => (e.tags || []).includes(args.tag!))
+    if (args.stale !== undefined) entries = entries.filter((e) => !!(e.meta as any)?.stale === args.stale)
     entries.sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt))
-    return JSON.stringify({ cursor: store.cursor, count: entries.length, entries }, null, 2)
+    return JSON.stringify({
+      cursor: store.cursor,
+      coverage: store.coverage,
+      count: entries.length,
+      staleCount: store.entries.filter((e) => (e.meta as any)?.stale).length,
+      entries,
+    }, null, 2)
   },
 })
 
@@ -379,9 +473,11 @@ export const roles = tool({
     }
 
     let changed = false
+    const warnings: string[] = []
     for (const p of args.people || []) {
       const aliases = (p.aliases || []).map((a) => String(a).trim()).filter(Boolean)
       if (!aliases.length) continue
+      for (const a of aliases) for (const w of aliasWarnings(a)) if (!warnings.includes(w)) warnings.push(w)
       const existing = roster.people.find((x) => x.aliases.some((a) => aliases.includes(a)))
       // A role only counts if it is in the vocabulary — otherwise roles drift
       // between runs ("Backend Developer" one week, "Backend Dev" the next).
@@ -413,7 +509,9 @@ export const roles = tool({
       rolesInUse: inUse,
       people: roster.people,
       rosterPath: rpath,
+      protectedTerms: protectedTerms(),
     }
+    if (warnings.length) result.warnings = warnings
     if (args.scrub !== undefined) result.scrubbed = scrubNames(args.scrub, roster)
     return JSON.stringify(result, null, 2)
   },
@@ -624,6 +722,26 @@ export const init = tool({
       "Jira tickets to store as roadmap/board entries. Pass the standard ticket-format fields " +
       "(context/goal/approach/acceptanceCriteria/... — see paul_ticket_body) so the structured spec " +
       "is stored in meta.spec and the body can be re-rendered identically later."),
+    coverage: S.object({
+      jiraExpected: S.number().optional().describe(
+        "How many issues the Jira search reported IN TOTAL for the project (the 'total' field), " +
+        "not how many you sent. This is what lets PAUL detect that it silently missed some."),
+      confluenceExpected: S.number().optional().describe(
+        "How many pages the Confluence space contains in total, including ones you chose to skip."),
+      complete: S.boolean().optional().describe(
+        "True only if you paginated to the end of BOTH sources and every item is either indexed " +
+        "or listed in skipped[]. Setting this when it is not true is how duplicates get created " +
+        "later, and it is also what allows entries you did not see to be marked stale."),
+      skipped: S.array(S.object({
+        externalId: S.string().describe("Page id or Jira key that was deliberately not indexed"),
+        title: S.string().optional(),
+        reason: S.string().describe("Why, e.g. 'template', 'space home', 'empty stub', 'archived'"),
+        source: S.string().optional().describe("jira | confluence (default confluence)"),
+      })).optional().describe("Items you decided not to index, with the reason — so a later run " +
+        "can tell a deliberate skip from something nobody ever looked at."),
+    }).optional().describe(
+      "What this index actually saw. PAUL reconciles it against what landed in the store and " +
+      "records any unexplained gap, because the no-duplicates guarantee depends on full coverage."),
   },
   async execute(rawArgs, ctx) {
     const path = storePath(ctx as any)
@@ -650,6 +768,11 @@ export const init = tool({
     const clean = (o: Record<string, unknown>) =>
       Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined))
 
+    // Which entries this run actually touched. Identity, not timestamps: two indexes
+    // can land in the same millisecond, and then "lastSeen === now" would wrongly
+    // report an untouched entry as seen.
+    const touched = new Set<string>()
+
     const upsert = (fields: Partial<Entry> & { externalId: string; type: string; title: string }) => {
       const existing = byExt.get(fields.externalId)
       if (existing) {
@@ -664,7 +787,12 @@ export const init = tool({
         const oldSpec = existing.meta?.spec as Record<string, unknown> | undefined
         const newSpec = (fMeta as Record<string, unknown> | undefined)?.spec as Record<string, unknown> | undefined
         if (oldSpec && newSpec) mergedMeta.spec = { ...oldSpec, ...clean(newSpec) }
+        // Seeing an item again clears any stale mark from a previous index.
+        mergedMeta.lastSeen = now
+        delete mergedMeta.stale
+        delete mergedMeta.staleSince
         Object.assign(existing, clean(fRest as Record<string, unknown>), { meta: mergedMeta, updatedAt: now })
+        touched.add(existing.id)
         return { action: "updated", id: existing.id }
       }
       const entry: Entry = {
@@ -675,12 +803,17 @@ export const init = tool({
         order: fields.order ?? (maxOrder += 10),
         details: fields.details,
         tags: fields.tags,
-        meta: { ...clean((fields.meta || {}) as Record<string, unknown>), externalId: fields.externalId },
+        meta: {
+          ...clean((fields.meta || {}) as Record<string, unknown>),
+          externalId: fields.externalId,
+          lastSeen: now,
+        },
         createdAt: now,
         updatedAt: now,
       }
       store.entries.push(entry)
       byExt.set(fields.externalId, entry)
+      touched.add(entry.id)
       return { action: "added", id: entry.id }
     }
 
@@ -754,12 +887,65 @@ export const init = tool({
     if (args.cursorNote !== undefined) store.cursor.note = args.cursorNote
     if (args.cursorPhase !== undefined || args.cursorNote !== undefined) store.cursor.updatedAt = now
 
+    // ---- coverage reconciliation ----------------------------------------------
+    // Compare what the source said exists against what actually landed here. The
+    // agent asserts nothing; the numbers do the arguing.
+    const cov = args.coverage as {
+      jiraExpected?: number; confluenceExpected?: number; complete?: boolean
+      skipped?: { externalId: string; title?: string; reason: string; source?: string }[]
+    } | undefined
+    const staleSources: string[] = []
+    if (cov) {
+      const skipped = cov.skipped || []
+      const skippedFor = (src: string) =>
+        skipped.filter((s) => (s.source || "confluence").toLowerCase() === src).length
+      const indexedFor = (src: string) =>
+        store.entries.filter((e) => (e.meta as any)?.source === src).length
+      const gaps: string[] = []
+      const coverage: Coverage = { checkedAt: now, complete: false, skipped }
+
+      for (const [src, expected] of [["jira", cov.jiraExpected], ["confluence", cov.confluenceExpected]] as const) {
+        if (expected === undefined) continue
+        const indexed = indexedFor(src), skip = skippedFor(src)
+        ;(coverage as any)[src] = { expected, indexed, skipped: skip }
+        const missing = expected - (indexed + skip)
+        if (missing > 0) {
+          gaps.push(`${src}: source reports ${expected}, store has ${indexed} indexed + ${skip} skipped ` +
+            `— ${missing} unaccounted for. PAUL may create duplicates for those.`)
+        } else {
+          // Fully accounted for, so "not seen this run" now means "no longer there".
+          staleSources.push(src)
+        }
+      }
+      if (gaps.length) coverage.gaps = gaps
+      coverage.complete = !!cov.complete && !gaps.length
+      store.coverage = coverage
+    }
+
+    // ---- staleness -------------------------------------------------------------
+    // Only mark entries stale for a source whose coverage reconciled: if PAUL did
+    // not manage to see everything, "I did not see it" says nothing about whether
+    // it still exists, and flagging it would be a guess dressed up as a fact.
+    let markedStale = 0
+    if (store.coverage?.complete && staleSources.length) {
+      for (const e of store.entries) {
+        const src = (e.meta as any)?.source
+        if (!src || !staleSources.includes(src)) continue
+        if (touched.has(e.id)) continue
+        if ((e.meta as any)?.stale) continue
+        e.meta = { ...(e.meta || {}), stale: true, staleSince: now }
+        markedStale++
+      }
+    }
+
     save(path, store)
     return JSON.stringify({
       reset: !!args.reset,
       imported: result,
       totalEntries: store.entries.length,
       cursor: store.cursor,
+      coverage: store.coverage,
+      markedStale,
       scrubbed,
     }, null, 2)
   },
@@ -795,6 +981,28 @@ function renderPageBody(store: Store, roster: Roster): string {
   html += `<p><strong>Last updated:</strong> ${esc(now)}</p>`
   html += `<h2>Roadmap cursor</h2><p><strong>Phase:</strong> ${esc(store.cursor.phase)}<br/>${esc(store.cursor.note)}</p>`
 
+  // Coverage belongs at the top: a reader has to know whether this page describes
+  // the whole project or only the part PAUL managed to read.
+  const cv = store.coverage
+  if (cv) {
+    const part = (label: string, c?: { expected?: number; indexed: number; skipped: number }) =>
+      c ? `${label}: ${c.indexed} indexed${c.skipped ? `, ${c.skipped} skipped` : ""}${c.expected !== undefined ? ` of ${c.expected}` : ""}` : ""
+    const parts = [part("Jira", cv.jira), part("Confluence", cv.confluence)].filter(Boolean)
+    html += `<h2>Coverage</h2><p><strong>Last indexed:</strong> ${esc(cv.checkedAt)}<br/>${esc(parts.join(" &middot; "))}</p>`
+    if (cv.gaps?.length) {
+      html += `<p><strong>Incomplete — this page is not the whole project:</strong></p><ul>`
+      for (const g of cv.gaps) html += `<li>${esc(g)}</li>`
+      html += `</ul>`
+    } else if (cv.complete) {
+      html += `<p><em>Every item in both sources is either indexed or listed as deliberately skipped.</em></p>`
+    }
+    if (cv.skipped?.length) {
+      html += `<p><strong>Skipped on purpose (${cv.skipped.length}):</strong></p><ul>`
+      for (const s of cv.skipped) html += `<li>${esc(s.title || s.externalId)} — ${esc(s.reason)}</li>`
+      html += `</ul>`
+    }
+  }
+
   html += `<h2>Tickets (${tix.length})</h2>`
   for (const st of order) {
     const list = byStatus[st]
@@ -806,7 +1014,9 @@ function renderPageBody(store: Store, roster: Roster): string {
       // mirror shows at a glance which ones nobody could pick up and solve.
       const gaps = validateSpec(((e.meta as any)?.spec as TicketSpec) || {})
       const flag = gaps.length ? ` <em>— needs detail (${esc(gaps.join(", "))})</em>` : ""
-      html += `<li>${ext ? `<strong>${esc(ext)}</strong> — ` : ""}${esc(e.title)}${flag}</li>`
+      // Stale = a complete index no longer found it in the source. Probably deleted.
+      const stale = (e.meta as any)?.stale ? ` <em>— gone from the source since ${esc(String((e.meta as any).staleSince || "").slice(0, 10))}</em>` : ""
+      html += `<li>${ext ? `<strong>${esc(ext)}</strong> — ` : ""}${esc(e.title)}${stale}${flag}</li>`
     }
     html += `</ul>`
   }

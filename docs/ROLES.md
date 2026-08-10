@@ -96,6 +96,34 @@ person called Mark — are left alone.
 own discipline, not a replacement for it — which is why `process_meetings.sh` makes registering
 people PHASE 0.5, before anything is written.
 
+## Protected terms
+
+A first name is often also a product, a vendor, or an ordinary word. With someone called Paul on the
+team, `Paul memory keeps the roadmap truthful` became `Full-stack Developer memory keeps the roadmap
+truthful`, and `Carl Zeiss` became `Stakeholder Zeiss` — silently, in text people then read.
+
+Protected terms are masked before the roster runs and restored afterwards, so the longer, more
+specific phrase always wins over a bare first name:
+
+| Text | Result |
+|---|---|
+| `Paul memory keeps the roadmap truthful.` | unchanged — `Paul memory` is protected |
+| `Paul chaired the meeting.` | `Full-stack Developer chaired the meeting.` |
+
+`PAUL`, `Paul memory`, `AGENTSMEMORY`, `OpenCode`, `Confluence`, `Jira` and `Atlassian` are protected
+by default. Add your own product and vendor names:
+
+```bash
+PAUL_PROTECTED_TERMS="Carl Zeiss,ACME Payments,Iris" ./process_meetings.sh notes.json
+```
+
+`paul_roles` returns a `warnings` array when an alias is likely to cause this — three characters or
+fewer, lowercase (the scrub is case-sensitive and would miss the capitalised spelling), or colliding
+with a protected term. They are warnings, not rejections: a nickname that is also a common word may
+still be the only way someone is referred to in a transcript, and leaking a real name is worse than
+mangling a sentence. The point is that you see the trade when you register the alias, rather than
+discovering it on a published page.
+
 ## The transcript is not uploaded
 
 The meeting notes page carries the overview, the key decisions and the action items. The verbatim

@@ -37,6 +37,11 @@ PAUL never writes a real name. Everyone is their project role — "Backend Devel
 PAUL rewrites names it recognises on every write and render path, but that is a safety net under
 your own discipline — it cannot catch a person nobody registered.
 
+Product and vendor names are protected from the scrub (`PAUL`, `AGENTSMEMORY`, `OpenCode`,
+`Confluence`, `Jira`, `Atlassian`, plus anything in `PAUL_PROTECTED_TERMS`), so an alias that is also
+a product name cannot corrupt it. If `paul_roles` returns `warnings`, an alias you registered is
+risky — too short, lowercase, or colliding with a protected term. Report them; do not ignore them.
+
 The name→role map lives in `.paul/roster.local.json`, which is gitignored and never exported.
 `memory.json` holds only the role vocabulary. Never copy a name out of the roster into anything else.
 
@@ -96,7 +101,8 @@ deciding, and someone already chose what became a ticket.
 5. SUMMARIZE each page and issue yourself — what it establishes, what is decided, what is
    still open. Your summary is the memory; the page body is not copied.
 6. Derive the roadmap cursor (what phase/sprint the project is currently in).
-7. Call `paul_init` ONCE with `docs[]`, `meetings[]`, `tickets[]`, `cursorPhase`, `cursorNote`:
+7. Call `paul_init` ONCE with `docs[]`, `meetings[]`, `tickets[]`, `cursorPhase`, `cursorNote`,
+   and `coverage`:
    - `docs[]` — standing knowledge: specs, decision records, references, onboarding, process
      pages. Fields: `externalId` (page id), `title`, `summary`, `docType`, `version`, `url`,
      and `parentId`/`parentTitle` for subpages so the tree stays navigable.
@@ -104,6 +110,12 @@ deciding, and someone already chose what became a ticket.
    - `tickets[]` — Jira issues, with `order` and (when known) `complexity` (Low|Medium|High),
      `priority` (Low|Medium|High|Critical) and `timeEstimate` (e.g. 2h, 1d). Lower `order` =
      higher on the board. Pass spec fields through only where the issue actually states them.
+   - `coverage` — `{ jiraExpected, confluenceExpected, complete, skipped[] }`. Pass the TOTALS the
+     searches reported, not what you sent, and list everything you chose not to index with a reason.
+     PAUL subtracts indexed + skipped from expected and records the remainder as a visible gap.
+     Only set `complete: true` if you really paginated to the end of both sources — the dedupe
+     guarantee, and therefore "do not create a duplicate ticket", depends on it. Once coverage is
+     complete, entries the index no longer found are marked stale rather than deleted.
    Every item's `externalId` is the dedup key, so re-running updates in place. Use
    `reset: true` only for a clean full re-index.
 
@@ -134,6 +146,9 @@ PUSH AFTER — whenever you change local memory (paul_add/update/remove/cursor/i
 
 ## How to use it
 1. At the start of PAUL work, call `paul_list` and `paul_cursor` (no args) to load current state.
+   Check the `coverage` it returns: if the last index reported gaps, this list is NOT the whole
+   project, so absence from it does not prove something does not exist. Say so rather than
+   concluding a ticket is new.
 2. Order tickets on the board using each entry's `order` field (lower = higher priority).
 3. As work progresses, keep state truthful: `paul_update` a ticket's `status`
    (todo → in_progress → review → done | blocked), and update `paul_cursor`

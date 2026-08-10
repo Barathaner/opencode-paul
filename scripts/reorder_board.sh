@@ -19,16 +19,22 @@
 #
 # Ranking uses each ticket's stable Jira key (meta.externalId in PAUL).
 #
+# PREVIEW BY DEFAULT. Board order on an existing project is usually something a
+# team agreed in refinement, and this script would silently replace it with an
+# order a model derived. So it prints what it would do and changes nothing until
+# you pass PAUL_REORDER_APPLY=1, having read the preview.
+#
 # Required env:
 #   PAUL_JIRA_URL        e.g. https://your-team.atlassian.net
 #   PAUL_JIRA_EMAIL      Atlassian account email
 #   ATLASSIAN_API_TOKEN  Atlassian API token
 # Optional:
+#   PAUL_REORDER_APPLY=1     actually rank the board (without it this is a preview)
 #   PAUL_PROJECT_DIR         defaults to $HOME/opencode_automations/paul-project
 #   PAUL_REORDER_STATUSES    space-separated PAUL statuses to reorder (default: "todo backlog")
 #   PAUL_JIRA_RANK_FIELD     LexoRank custom field id (e.g. customfield_10019) if the
 #                            instance requires it; usually auto-detected, leave unset.
-#   DRY_RUN=1                print the planned rank calls without calling Jira.
+#   DRY_RUN=1                force preview mode even when PAUL_REORDER_APPLY=1.
 
 set -uo pipefail
 
@@ -41,7 +47,13 @@ PAUL_ENV="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/paul.env"
 PROJECT_DIR="${PAUL_PROJECT_DIR:-$HOME/opencode_automations/paul-project}"
 STORE="$PROJECT_DIR/.paul/memory.json"
 REORDER_STATUSES="${PAUL_REORDER_STATUSES:-todo backlog}"
-DRY_RUN="${DRY_RUN:-0}"
+# Preview unless explicitly told to apply. Re-ranking someone else's board is not
+# something to do as a side effect of a meeting transcript being processed.
+if [ "${DRY_RUN:-}" = "1" ] || [ "${PAUL_REORDER_APPLY:-0}" != "1" ]; then
+  DRY_RUN=1
+else
+  DRY_RUN=0
+fi
 
 err() { echo "[reorder] ERROR: $*" >&2; }
 info() { echo "[reorder] $*"; }
@@ -78,7 +90,11 @@ if [ -z "$ORDERED_KEYS" ]; then
 fi
 
 COUNT=$(echo "$ORDERED_KEYS" | wc -l)
-info "Reordering $COUNT ticket(s) in columns [$REORDER_STATUSES] by PAUL order:"
+if [ "$DRY_RUN" = "1" ]; then
+  info "PREVIEW — $COUNT ticket(s) in columns [$REORDER_STATUSES] WOULD be ranked in this order:"
+else
+  info "Reordering $COUNT ticket(s) in columns [$REORDER_STATUSES] by PAUL order:"
+fi
 echo "$ORDERED_KEYS" | nl -ba | sed 's/^/[reorder]   /'
 
 RANK_URL="${PAUL_JIRA_URL:-}"
@@ -121,4 +137,9 @@ if [ "$FAILS" -gt 0 ]; then
   err "$FAILS rank call(s) failed."
   exit 1
 fi
-info "Board reorder complete."
+if [ "$DRY_RUN" = "1" ]; then
+  info "Preview only — the board was NOT changed."
+  info "Re-run with PAUL_REORDER_APPLY=1 to apply this order."
+else
+  info "Board reorder complete."
+fi

@@ -58,7 +58,7 @@ ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN ./setup.sh
 
 | Tool | Purpose |
 |------|---------|
-| `paul_list` | Read entries (roadmap/epic/ticket/milestone/blocker), sorted by `order`; filter by type/status/tag. Returns the roadmap cursor too. |
+| `paul_list` | Read entries (roadmap/epic/ticket/milestone/blocker), sorted by `order`; filter by type/status/tag/stale. Returns the roadmap cursor and the last index's coverage. |
 | `paul_add` | Create an entry (type, title, status, order, tags, freeform `meta`). |
 | `paul_update` | Change an entry by id — move status, re-order the board, merge `meta`. |
 | `paul_remove` | Delete an entry by id. |
@@ -133,6 +133,14 @@ paul_roles({ people: [
 
 // "Karl found the Okta bug"  ->  "Backend Developer found the Okta bug"
 ```
+
+A first name is often also a product, a vendor or an ordinary word, and the scrub replaces every
+occurrence it finds. **Protected terms** are masked before the roster runs and restored afterwards,
+so with someone called Paul on the team `Paul memory` stays `Paul memory` while `Paul chaired the
+meeting` still becomes the role. `PAUL`, `AGENTSMEMORY`, `OpenCode`, `Confluence`, `Jira` and
+`Atlassian` are protected out of the box; add your own with `PAUL_PROTECTED_TERMS="Carl Zeiss,ACME"`.
+`paul_roles` also warns when an alias is very short, lowercase, or collides with a protected term,
+so you see the trade at registration rather than in a published page.
 
 The roster is the one place real names still exist, so it lives in
 `.paul/roster.local.json` — gitignored, never exported to Confluence, never merged by
@@ -240,6 +248,13 @@ not turn action items found in old documents into tickets. The guarantee is prom
 API-level — details, plus the version-based skip that makes re-runs cheap, in
 [docs/INIT_FROM_DOCS.md](./docs/INIT_FROM_DOCS.md).
 
+**It reconciles its own coverage.** PAUL's promise — never create a ticket that already exists — is
+only as good as what it actually read, so each index compares the totals the sources report against
+what landed in the store, and records anything unaccounted for as a visible gap on the mirror
+instead of quietly believing it saw everything. Pages deliberately skipped are listed with a reason.
+Once coverage reconciles, items that have disappeared from the source are marked stale rather than
+deleted (`paul_list stale:true`).
+
 ## The meeting pipeline (`process_meetings.sh`)
 
 This is what PAUL was built for. `process_meetings.sh` takes a Whisper-style JSON
@@ -265,11 +280,12 @@ What each run does, in order:
 4. **Action items → Jira, standard format, deduped** — extracts action items, builds a
    ticket spec for each (context, goal, a numbered approach, acceptance criteria, complexity,
    priority, estimate), renders it through `paul_ticket_body` and sends that body to Jira
-   verbatim. Only *new* tickets are created; ones PAUL already tracks are reused and their
-   description re-rendered, so older free-form tickets converge on the format. (Without PAUL,
-   the old script re-created the same tickets on every run.) Only summary + description are
-   sent — no priority field, no timetracking, no labels, no assignment — which avoids
-   project-specific field-scheme errors. See [the ticket format](#the-ticket-format).
+   verbatim. Only *new* tickets are created. (Without PAUL, the old script re-created the same
+   tickets on every run.) A ticket PAUL already tracks is **left alone in Jira** — its description
+   was written by a person, and replacing it is opt-in via `PAUL_REWRITE_DESCRIPTIONS=1`; the fresh
+   spec still lands in PAUL memory either way. Only summary + description are sent — no priority
+   field, no timetracking, no labels, no assignment — which avoids project-specific field-scheme
+   errors. See [the ticket format](#the-ticket-format).
 5. **Record into PAUL** — `paul_init` writes the meeting summary + tickets into the store.
    **Complexity** (Low/Medium/High), **Priority** (Low/Medium/High/Critical) and the
    **Time estimate** are carried in PAUL `meta`, and the full spec in `meta.spec` so the
@@ -277,12 +293,14 @@ What each run does, in order:
    ticket a PAUL `order` from those attributes.
 6. **Push memory** — exports and updates the `AGENTSMEMORY` page, so the next run — or a
    teammate on another machine — starts from this meeting's state.
-7. **Reorder the Jira board** — `scripts/reorder_board.sh` ranks the board to match PAUL's
-   `order`, so in the Atlassian web UI the **open / "Zu erledigen"** column (and a
-   **backlog** column if present) show tickets top-to-bottom in do-this-first order. It
-   only reranks `todo` + `backlog`; `in_progress`, `review`, `blocked` and `done` are left
-   untouched. mcp-atlassian has no rank tool, so this step calls the Jira Agile REST API
-   (`PUT /rest/agile/1.0/issue/rank`) directly — PAUL memory stays the source of truth.
+7. **Preview the board order** — `scripts/reorder_board.sh` prints the order the board *would*
+   have if it matched PAUL's `order`, so the **open / "Zu erledigen"** column (and a **backlog**
+   column if present) would read top-to-bottom in do-this-first order. **It changes nothing until
+   you pass `PAUL_REORDER_APPLY=1`**: on an existing project the column order is usually something
+   a team agreed in refinement, and replacing it should be a decision rather than a side effect of
+   processing a transcript. It only ever reranks `todo` + `backlog`; `in_progress`, `review`,
+   `blocked` and `done` are left untouched. mcp-atlassian has no rank tool, so applying calls the
+   Jira Agile REST API (`PUT /rest/agile/1.0/issue/rank`) directly.
 
 A `processed_files.csv` hash-tracker skips transcripts that were already processed. The
 script runs OpenCode from a dedicated project dir (`PAUL_PROJECT_DIR`, a git repo) so
@@ -299,6 +317,9 @@ All paths and keys are environment-overridable (defaults in parentheses):
 | `PAUL_JIRA_PROJECT` | `KAN` | Jira project key |
 | `PAUL_AGENTSMEMORY_TITLE` | `AGENTSMEMORY` | shared memory page title |
 | `PAUL_ROLES` | built-in list | comma-separated [role vocabulary](./docs/ROLES.md) people are mapped to |
+| `PAUL_PROTECTED_TERMS` | built-in list | comma-separated terms the name scrub must never rewrite |
+| `PAUL_REWRITE_DESCRIPTIONS` | `0` | `1` lets the pipeline replace an existing Jira description with a re-rendered one |
+| `PAUL_REORDER_APPLY` | `0` | `1` actually re-ranks the board; otherwise the reorder is a preview |
 
 **Board reorder** (`scripts/reorder_board.sh`, called automatically in step 7, also runnable
 standalone) needs Jira REST credentials — reuse your Atlassian ones:
@@ -308,9 +329,10 @@ standalone) needs Jira REST credentials — reuse your Atlassian ones:
 | `PAUL_JIRA_URL` | e.g. `https://your-team.atlassian.net` (falls back to `JIRA_URL`) |
 | `PAUL_JIRA_EMAIL` | Atlassian account email (falls back to `JIRA_USERNAME`) |
 | `ATLASSIAN_API_TOKEN` | Atlassian API token |
+| `PAUL_REORDER_APPLY=1` | **required to actually rank the board** — without it this is a preview |
 | `PAUL_REORDER_STATUSES` | statuses to rerank (default `todo backlog`) |
 | `PAUL_JIRA_RANK_FIELD` | LexoRank field id (e.g. `customfield_10019`) if your instance needs it |
-| `DRY_RUN=1` | print the planned rank calls without touching Jira |
+| `DRY_RUN=1` | force preview mode even when `PAUL_REORDER_APPLY=1` |
 
 Requires the `mcp-atlassian` MCP server wired up (see below) and a working `opencode`
 model endpoint. Trigger it from a file watcher / cron / Teams webhook per new transcript.

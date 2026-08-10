@@ -126,6 +126,23 @@ CHAR_COUNT=$(printf '%s' "$TRANSCRIPT_TEXT" | wc -c)
 log "Transcript successfully parsed ($LINE_COUNT lines, $CHAR_COUNT chars)."
 
 MEETING_DATE="$(date +'%Y-%m-%d %H:%M')"
+
+# An existing ticket's description is something a human wrote: context, links, wording
+# someone negotiated. Replacing it with a re-rendered body is a real edit to other
+# people's work, so it is opt-in rather than a side effect of processing a transcript.
+if [ "${PAUL_REWRITE_DESCRIPTIONS:-0}" = "1" ]; then
+  REWRITE_RULE='- PAUL_REWRITE_DESCRIPTIONS is on: for a matched existing ticket, call jira update_issue
+  with the freshly rendered description so older free-form tickets converge on the format.
+  Update the status too if the meeting changed it.'
+  log "PAUL_REWRITE_DESCRIPTIONS=1 — existing Jira descriptions WILL be rewritten."
+else
+  REWRITE_RULE='- DO NOT modify the existing Jira issue. Do not call jira update_issue on it, do not
+  rewrite its description, do not change its status or any other field. Someone wrote that
+  description by hand and this run is not authorised to replace it. The freshly rendered spec
+  still goes into PAUL memory in PHASE 3, so the board ordering and the mirror stay correct —
+  only Jira is left alone. (Set PAUL_REWRITE_DESCRIPTIONS=1 to allow rewriting.)'
+fi
+
 log "Invoking OpenCode CLI ($OPENCODE_BIN) with PAUL memory integration..."
 
 # Build the PAUL-aware prompt. PAUL makes the pipeline stateful: pull memory
@@ -199,8 +216,8 @@ PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PA
   never hand-write or reformat it.
 - Check the paul_list results from PHASE 0 first. If an equivalent ticket already exists
   (same intent / matching title or meta.externalId), do NOT create a duplicate — reuse
-  the existing Jira key and jira update_issue it with the freshly rendered description
-  (and the status if it changed), so older free-form tickets converge on the format.
+  the existing Jira key and record the freshly rendered spec in PAUL memory in PHASE 3.
+$REWRITE_RULE
 - Only create a NEW Jira task in project "$JIRA_PROJECT" for genuinely new action items.
   When creating (jira create_issue) set ONLY the summary and the description.
   DO NOT set any other Jira fields — no priority, no timetracking/estimate, no labels,
@@ -261,13 +278,20 @@ if [ $OPENCODE_EXIT_CODE -eq 0 ]; then
   # mcp-atlassian has no rank tool, so we rank via the Agile REST API here.
   # Only touches the todo (open / "Zu erledigen") and backlog columns; leaves
   # in_progress / review / blocked / done untouched.
+  # PREVIEW unless PAUL_REORDER_APPLY=1: the column order is usually something the
+  # team agreed, and re-ranking it should be a decision, not a side effect.
   REORDER_SCRIPT="$(cd "$(dirname "$0")" && pwd)/scripts/reorder_board.sh"
   if [ -x "$REORDER_SCRIPT" ]; then
-    log "Reordering Jira board from PAUL memory (todo + backlog columns)..."
+    if [ "${PAUL_REORDER_APPLY:-0}" = "1" ]; then
+      log "Reordering Jira board from PAUL memory (todo + backlog columns)..."
+    else
+      log "Previewing board order from PAUL memory (set PAUL_REORDER_APPLY=1 to apply)..."
+    fi
     PAUL_PROJECT_DIR="$PROJECT_DIR" \
     PAUL_JIRA_URL="${PAUL_JIRA_URL:-${JIRA_URL:-}}" \
     PAUL_JIRA_EMAIL="${PAUL_JIRA_EMAIL:-${JIRA_USERNAME:-}}" \
     ATLASSIAN_API_TOKEN="${ATLASSIAN_API_TOKEN:-}" \
+    PAUL_REORDER_APPLY="${PAUL_REORDER_APPLY:-0}" \
       "$REORDER_SCRIPT" 2>&1 | tee -a "$LOG_FILE"
     RC=${PIPESTATUS[0]}
     [ "$RC" -eq 0 ] && log "Board reorder finished." || log "WARN: board reorder exited $RC (memory is still correct; check Jira creds/rank field)."

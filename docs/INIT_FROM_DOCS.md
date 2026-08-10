@@ -71,6 +71,38 @@ it — but if you need a hard guarantee, run against a read-only Atlassian API t
 report also states which writes happened, so a violation is visible in the log at
 `$PAUL_LOG_DIR/init_from_docs.log`.
 
+## Coverage: knowing what it did *not* see
+
+PAUL's core promise is that it will not create a ticket that already exists, and it checks that
+against what it has indexed. So an issue it never read looks new — and gets duplicated weeks later.
+That failure is silent by nature, which is why each index now reconciles itself:
+
+- The agent passes the **totals the sources reported** (`coverage.jiraExpected`,
+  `coverage.confluenceExpected`) plus every item it deliberately skipped, with a reason.
+- `paul_init` computes `expected − (indexed + skipped)` and records anything left over as a **gap**.
+- Gaps appear at the top of the `AGENTSMEMORY` page under **Coverage**, and come back from
+  `paul_list`, so the next session knows the list it is reading is not the whole project.
+- `complete: true` only survives if the numbers agree. An agent that claims full coverage while a
+  gap exists is overruled by the arithmetic.
+
+```bash
+jq '.coverage' "$PAUL_PROJECT_DIR/.paul/memory.json"
+```
+
+A declared gap is fine — restricted permissions, a huge space, an interrupted run. A silent one is
+what causes duplicate tickets.
+
+## Stale entries
+
+Once coverage reconciles for a source, "PAUL did not see it this run" means "it is no longer there".
+Those entries are marked `meta.stale` with a `staleSince` date rather than deleted — a ticket that
+vanished from Jira may have been moved, and its summary is still project history. The mirror shows
+them as *"gone from the source since …"*, and `paul_list stale:true` lists them. Seeing an item
+again clears the mark automatically.
+
+Nothing is ever marked stale while coverage is incomplete: not having seen something says nothing
+about whether it exists when you know you did not read everything.
+
 ## Re-running is the normal case
 
 Every entry is deduped by `externalId` (Confluence page id, Jira key), so a second run updates in

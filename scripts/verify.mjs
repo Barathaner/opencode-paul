@@ -149,6 +149,53 @@ ok(back.entries.length === 2 && back.entries.some((x) => x.meta.version === 4),
 rmSync(DIR6, { recursive: true, force: true })
 rmSync(DIR7, { recursive: true, force: true })
 
+// 4c) Coverage reconciliation and staleness — the no-duplicates guarantee is only
+// as good as what the index actually saw, so a gap has to be loud.
+const DIR9 = "/tmp/opencode-paul-verify9"
+rmSync(DIR9, { recursive: true, force: true })
+const ctx9 = { worktree: DIR9, directory: DIR9 }
+const tix = (n) => Array.from({ length: n }, (_, i) => ({ externalId: `KAN-${i + 1}`, title: `T${i + 1}` }))
+
+// Source says 10 issues, we indexed 8 and explained 1 → 1 unaccounted for.
+const gap = J(await P.init.execute({
+  tickets: tix(8),
+  coverage: { jiraExpected: 10, complete: true, skipped: [{ externalId: "KAN-9", reason: "sub-task", source: "jira" }] },
+}, ctx9))
+ok(gap.coverage.jira.expected === 10 && gap.coverage.jira.indexed === 8 && gap.coverage.jira.skipped === 1,
+  "coverage: counts expected vs indexed vs deliberately skipped")
+ok(gap.coverage.gaps?.length === 1 && /1 unaccounted for/.test(gap.coverage.gaps[0]),
+  "coverage: an unexplained difference is reported as a gap")
+ok(gap.coverage.complete === false,
+  "coverage: complete cannot be asserted while a gap exists (the agent said true; the numbers said no)")
+ok(gap.markedStale === 0, "staleness: nothing is marked stale while coverage is incomplete")
+
+// Now account for everything: 9 indexed + 1 skipped = 10.
+const accounted = J(await P.init.execute({
+  tickets: tix(9),
+  coverage: { jiraExpected: 10, complete: true, skipped: [{ externalId: "KAN-10", reason: "sub-task", source: "jira" }] },
+}, ctx9))
+ok(!accounted.coverage.gaps && accounted.coverage.complete === true,
+  "coverage: no gap once every item is accounted for")
+
+// A later complete index that no longer sees KAN-9 must mark it stale, not delete it.
+const stale = J(await P.init.execute({
+  tickets: tix(8),
+  coverage: { jiraExpected: 8, complete: true },
+}, ctx9))
+ok(stale.markedStale === 1, "staleness: an item a complete index no longer finds is marked stale")
+const staleList = J(await P.list.execute({ stale: true }, ctx9))
+ok(staleList.count === 1 && staleList.entries[0].meta.externalId === "KAN-9" && staleList.entries[0].meta.staleSince,
+  "staleness: paul_list can filter to stale entries, which keep their data")
+ok(J(await P.list.execute({ stale: false }, ctx9)).count === 8, "staleness: live entries can be listed without them")
+ok(J(await P.init.execute({ tickets: [{ externalId: "KAN-9", title: "T9 is back" }] }, ctx9))
+  .imported.tickets.updated === 1 && J(await P.list.execute({ stale: true }, ctx9)).count === 0,
+  "staleness: seeing an item again clears the stale mark")
+
+const covBody = readFileSync(J(await P.export_page.execute({}, ctx9)).bodyPath, "utf8")
+ok(covBody.includes("<h2>Coverage</h2>") && covBody.includes("9 indexed"),
+  "export_page: the mirror states what the last index covered")
+rmSync(DIR9, { recursive: true, force: true })
+
 // 5) Standard ticket format: rendering, validation, persistence.
 const FULL_SPEC = {
   complexity: "Medium", priority: "High", timeEstimate: "1d",
@@ -238,6 +285,23 @@ ok(sc.text.includes("Backend Developers Idee") && sc.text.includes("Participant 
   "scrub: possessives carried over (English and German)")
 ok(sc.text.includes("karl stays lowercase") && sc.text.includes("Karlsruhe stays"),
   "scrub: case-sensitive and word-bounded — no false positives")
+
+// Protected terms: an alias that is also a product or vendor name must not corrupt it.
+process.env.PAUL_PROTECTED_TERMS = "Karl Marx,Sarah Connor"
+const prot = J(await P.roles.execute({ scrub:
+  "Karl Marx wrote it, Sarah Connor called, PAUL stored it, but Karl shipped it."
+}, ctx4)).scrubbed
+delete process.env.PAUL_PROTECTED_TERMS
+ok(prot.text.includes("Karl Marx wrote it") && prot.text.includes("Sarah Connor called"),
+  "scrub: protected terms survive an alias that is a prefix of them")
+ok(prot.text.includes("PAUL stored it"), "scrub: PAUL's own name is protected by default")
+ok(prot.text.includes("Backend Developer shipped it"),
+  "scrub: a genuine name reference is still replaced alongside protected terms")
+
+const warned = J(await P.roles.execute({ people: [{ aliases: ["PAUL", "ab"], role: "QA Engineer" }] }, ctx4))
+ok((warned.warnings || []).some((w) => /collides with the protected term/.test(w)) &&
+   (warned.warnings || []).some((w) => /very short/.test(w)),
+  "roles: registering a risky alias returns a warning instead of silently mangling text later")
 
 ok(existsSync(DIR4 + "/.paul/roster.local.json"), "roles: names live in roster.local.json")
 const mem4 = () => readFileSync(DIR4 + "/.paul/memory.json", "utf8")
@@ -350,6 +414,16 @@ ok(setup.includes("npm install") && setup.includes("node_modules/@opencode-ai/pl
   "setup.sh installs test dependencies before running the harness")
 ok(setup.includes("rest/api/3/project/") && setup.includes("rest/api/space/"),
   "setup.sh verifies the Jira project and Confluence space actually exist")
+
+// Two writes to other people's work that must never happen as a side effect.
+const reorder = readFileSync(REPO + "scripts/reorder_board.sh", "utf8")
+ok(reorder.includes("PAUL_REORDER_APPLY") && /PAUL_REORDER_APPLY:-0.*!= "1"|!= "1".*PAUL_REORDER_APPLY/s.test(reorder),
+  "reorder_board.sh previews unless PAUL_REORDER_APPLY=1 (a curated board is not rewritten by default)")
+const meetings = readFileSync(REPO + "process_meetings.sh", "utf8")
+ok(meetings.includes("PAUL_REWRITE_DESCRIPTIONS") && meetings.includes("DO NOT modify the existing Jira issue"),
+  "process_meetings.sh leaves existing Jira descriptions alone unless PAUL_REWRITE_DESCRIPTIONS=1")
+ok(prompt.includes("jiraExpected") && prompt.includes("COVERAGE IS NOT A FORMALITY"),
+  "init_from_docs: the prompt collects the source totals so coverage can be reconciled")
 
 // Install URLs must agree with each other — a repo that does not exist breaks the quick start.
 const urlSources = ["README.md", "package.json"].map((f) => readFileSync(REPO + f, "utf8")).join("\n")
