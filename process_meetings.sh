@@ -35,6 +35,12 @@
 
 set -uo pipefail
 
+# Secrets + keys written by setup.sh, so you never have to `source` them first.
+# The environment wins when it already carries a token, so an explicit override
+# on the command line is never clobbered.
+PAUL_ENV="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/paul.env"
+[ -z "${ATLASSIAN_API_TOKEN:-}" ] && [ -f "$PAUL_ENV" ] && . "$PAUL_ENV"
+
 # --- CONFIGURATION (env-overridable; defaults are the production values) ---
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin/opencode}"
 export PATH="$(dirname "$OPENCODE_BIN"):$HOME/.local/bin:$PATH"

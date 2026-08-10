@@ -14,7 +14,7 @@ One script installs everything, asks for your Atlassian details, checks them, an
 up OpenCode:
 
 ```bash
-git clone https://github.com/KarlAugustinJahnel/opencode-paul.git
+git clone https://github.com/Barathaner/opencode-paul.git
 cd opencode-paul
 ./setup.sh
 ```
@@ -30,16 +30,21 @@ cd opencode-paul
 5. Write the token to a private `~/.config/opencode/paul.env` (chmod 600, git-ignored) and
    merge the `mcp-atlassian` server + PAUL plugin into `opencode.json` **non-destructively**
    (your existing config is backed up first; the token is stored as `{env:...}`, never inline).
-6. Append the PAUL behavior block to your `AGENTS.md` and run the test harness.
+6. Append the PAUL behavior block to your `AGENTS.md`, install the `/paul-init-docs` command, and
+   run the test harness.
+7. Offer to **index your existing Confluence space and Jira project into PAUL memory** — read-only
+   apart from PAUL's own mirror page. Say yes and PAUL already knows your project when you open
+   OpenCode.
 
-Then:
+That is the whole setup. There is no `source` step: every script loads
+`~/.config/opencode/paul.env` itself. To try the meeting pipeline on the bundled sample:
 
 ```bash
-source ~/.config/opencode/paul.env                       # load secrets (new shells do this automatically)
-./process_meetings.sh examples/sample-transcript.json    # try the meeting pipeline
+./process_meetings.sh examples/sample-transcript.json
 ```
 
-Re-running `setup.sh` is safe (idempotent). Prefer no prompts? Preset the answers:
+Re-running `setup.sh` is safe (idempotent). Prefer no prompts? Preset the answers — add
+`PAUL_BOOTSTRAP=1` to index the docs in the same run:
 
 ```bash
 NONINTERACTIVE=1 JIRA_URL=https://you.atlassian.net JIRA_EMAIL=you@example.com \
@@ -57,7 +62,7 @@ ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN ./setup.sh
 | `paul_cursor` | Get/set the single "where are we now" pointer (phase/sprint + note). |
 | `paul_roles` | Register people as project [roles](./docs/ROLES.md) and scrub real names out of text. |
 | `paul_ticket_body` | Render a ticket/action item/task into the [standard format](./docs/TICKET_FORMAT.md) and report missing fields. |
-| `paul_init` | Seed the store from Atlassian (Jira tickets + Confluence meeting summaries), deduped by `externalId`. |
+| `paul_init` | Seed the store from Atlassian — `docs[]` (specs/decisions/references), `meetings[]` (dated notes) and `tickets[]` (Jira issues), deduped by `externalId`. |
 | `paul_remote` | Get/set the pointer to the Confluence **AGENTSMEMORY** mirror page. |
 | `paul_export_page` | Render memory as a Confluence storage-format body (human summary + hidden lossless JSON block). |
 | `paul_import_page` | Merge an AGENTSMEMORY page back into local memory (newer `updatedAt` wins). |
@@ -155,7 +160,7 @@ Add the package to your OpenCode config. OpenCode auto-installs it with Bun at s
 Install straight from GitHub without publishing to npm:
 
 ```json
-{ "plugin": ["github:KarlAugustinJahnel/opencode-paul"] }
+{ "plugin": ["github:Barathaner/opencode-paul"] }
 ```
 
 (Once published: `{ "plugin": ["opencode-paul"] }` resolves from the npm registry.)
@@ -166,7 +171,7 @@ Clone and run the installer; it copies the single self-contained tool file into 
 global tools directory:
 
 ```bash
-git clone https://github.com/KarlAugustinJahnel/opencode-paul.git
+git clone https://github.com/Barathaner/opencode-paul.git
 cd opencode-paul
 ./scripts/install.sh          # copies tool/paul.ts -> ~/.config/opencode/tools/paul.ts
 ```
@@ -209,6 +214,28 @@ data to PAUL. Wire the MCP server in your `opencode.json`:
 ```
 
 Never hardcode tokens — use `{env:VAR}` and export the real value from your shell profile.
+
+## Bootstrap from the docs you already have (`scripts/init_from_docs.sh`)
+
+A team that already has a Confluence space and a Jira board should not have to wait for the next
+meeting before PAUL knows anything. This entrypoint has the agent **read** what already exists —
+every page in the space, following documentation trees into their subpages, plus every issue in the
+project — summarize it, and write what it learned into PAUL memory:
+
+```bash
+./scripts/init_from_docs.sh              # incremental — safe to repeat
+./scripts/init_from_docs.sh --reset      # rebuild memory from scratch
+./scripts/init_from_docs.sh --dry-run    # print the prompt, call nothing
+```
+
+Inside an OpenCode session, the same protocol runs as `/paul-init-docs` (installed by `setup.sh`;
+re-generate it after changing your space or project key with `./scripts/install_command.sh`).
+
+**It is read-only by contract**: it never creates or edits a Jira issue, never transitions, assigns
+or re-ranks one, and never touches a Confluence page other than the `AGENTSMEMORY` mirror. It does
+not turn action items found in old documents into tickets. The guarantee is prompt-level, not
+API-level — details, plus the version-based skip that makes re-runs cheap, in
+[docs/INIT_FROM_DOCS.md](./docs/INIT_FROM_DOCS.md).
 
 ## The meeting pipeline (`process_meetings.sh`)
 
@@ -304,7 +331,10 @@ model endpoint. Trigger it from a file watcher / cron / Teams webhook per new tr
 
 Commit it with your repo so the whole team (and every future session) shares the roadmap
 position. Lower `order` = higher priority on the board. Statuses:
-`backlog | todo | in_progress | blocked | review | done`.
+`backlog | todo | in_progress | blocked | review | done`. Entry types:
+`ticket | epic | doc | meeting | milestone | blocker | note` — `doc` entries carry the
+documentation summaries (with `meta.version` and `meta.parentId` for pages inside a tree),
+`meeting` entries the dated notes.
 
 ## Develop / test
 
@@ -316,8 +346,9 @@ drift). Run the harness (no OpenCode agent loop / model endpoint required):
 npm test          # node --experimental-strip-types scripts/verify.mjs
 ```
 
-It exercises all eleven tools plus the plugin registration, the ticket renderer and the
-name→role scrub against throwaway stores.
+It exercises all eleven tools plus the plugin registration, the ticket renderer, the doc
+indexing path and the name→role scrub against throwaway stores, and checks that the read-only
+doc-init prompt still names every forbidden write tool.
 
 ## Notes & gotchas
 

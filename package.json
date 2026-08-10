@@ -16,11 +16,11 @@
   "author": "Karl-Augustin Jahnel",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KarlAugustinJahnel/opencode-paul.git"
+    "url": "git+https://github.com/Barathaner/opencode-paul.git"
   },
-  "homepage": "https://github.com/KarlAugustinJahnel/opencode-paul#readme",
+  "homepage": "https://github.com/Barathaner/opencode-paul#readme",
   "bugs": {
-    "url": "https://github.com/KarlAugustinJahnel/opencode-paul/issues"
+    "url": "https://github.com/Barathaner/opencode-paul/issues"
   },
   "type": "module",
   "exports": {
@@ -31,6 +31,8 @@
     "src/",
     "tool/",
     "scripts/",
+    "prompts/",
+    "docs/",
     "examples/",
     "setup.sh",
     "process_meetings.sh",

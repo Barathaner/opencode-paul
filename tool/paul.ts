@@ -578,9 +578,10 @@ export const init = tool({
     "The AGENT gathers the source data first using the mcp-atlassian tools (confluence_search/" +
     "confluence_get_page for docs & meeting notes, jira_search/jira_get_issue for tickets), " +
     "SUMMARIZES each meeting/doc into a short memory, then calls this tool to persist everything " +
-    "as structured entries. Entries are deduped by 'externalId' (Confluence page id or Jira key) " +
-    "so re-running updates in place instead of duplicating. Set reset=true to wipe the store first " +
-    "for a clean re-index. Returns a summary of what was written.",
+    "as structured entries. Pass reference documentation (specs, decisions, onboarding) in docs[] " +
+    "and meeting notes in meetings[]. Entries are deduped by 'externalId' (Confluence page id or " +
+    "Jira key) so re-running updates in place instead of duplicating. Set reset=true to wipe the " +
+    "store first for a clean re-index. Returns a summary of what was written.",
   args: {
     reset: S.boolean().optional().describe("If true, clear all existing entries before importing"),
     cursorPhase: S.string().optional().describe("Roadmap cursor: current phase/sprint derived from the docs/tickets"),
@@ -591,7 +592,25 @@ export const init = tool({
       summary: S.string().describe("Short LLM summary: decisions, action items, current status on the topic"),
       date: S.string().optional().describe("Meeting date if known (ISO or as written)"),
       url: S.string().optional().describe("Link to the Confluence page"),
-    })).optional().describe("Summarized previous meetings / Confluence docs to store as memories"),
+    })).optional().describe("Summarized previous meetings / meeting notes pages to store as memories"),
+    docs: S.array(S.object({
+      externalId: S.string().describe("Confluence page id (stable dedup key)"),
+      title: S.string().describe("Document title, e.g. 'Payment Service Architecture'"),
+      summary: S.string().describe(
+        "Short LLM summary of what this document establishes: decisions it fixes, constraints it " +
+        "sets, and what is still open. Your own compression, not a copy of the page."),
+      docType: S.string().optional().describe("spec | decision | reference | onboarding | process"),
+      version: S.number().optional().describe(
+        "Confluence page version number. Stored so a later re-index can skip pages that have not " +
+        "changed instead of re-reading their bodies."),
+      url: S.string().optional().describe("Link to the Confluence page"),
+      parentId: S.string().optional().describe(
+        "Confluence page id of the parent page, when this page is part of a documentation tree " +
+        "(e.g. a section of an arc42 document). Omit for the root page of a tree."),
+      parentTitle: S.string().optional().describe("Title of the parent page, for readable context"),
+    })).optional().describe(
+      "Summarized reference documentation (specs, decisions, onboarding, process pages) — the " +
+      "standing knowledge about the project, as opposed to the dated meeting notes in meetings[]."),
     tickets: S.array(S.object({
       externalId: S.string().describe("Jira key, e.g. KAN-42 (stable dedup key)"),
       title: S.string().describe("Ticket summary"),
@@ -665,7 +684,11 @@ export const init = tool({
       return { action: "added", id: entry.id }
     }
 
-    const result = { meetings: { added: 0, updated: 0 }, tickets: { added: 0, updated: 0 } }
+    const result = {
+      meetings: { added: 0, updated: 0 },
+      docs: { added: 0, updated: 0 },
+      tickets: { added: 0, updated: 0 },
+    }
 
     for (const m of args.meetings || []) {
       const r = upsert({
@@ -678,6 +701,30 @@ export const init = tool({
         meta: { source: "confluence", externalId: m.externalId, date: m.date, url: m.url },
       })
       result.meetings[r.action as "added" | "updated"]++
+    }
+
+    // Reference docs are stored like meetings (source: confluence, so the mirror
+    // lists them under "Meetings & docs") but keep their own type, so a later
+    // paul_list can ask for the standing knowledge without the dated notes.
+    for (const d of args.docs || []) {
+      const r = upsert({
+        externalId: d.externalId,
+        type: "doc",
+        title: d.title,
+        status: "done",
+        details: d.summary,
+        tags: ["confluence", "doc"],
+        meta: {
+          source: "confluence",
+          externalId: d.externalId,
+          docType: d.docType,
+          version: d.version,
+          url: d.url,
+          parentId: d.parentId,
+          parentTitle: d.parentTitle,
+        },
+      })
+      result.docs[r.action as "added" | "updated"]++
     }
 
     for (const t of args.tickets || []) {

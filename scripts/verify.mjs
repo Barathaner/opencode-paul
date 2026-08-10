@@ -9,7 +9,7 @@
  *
  * Exit code 0 = all pass, 1 = a failure.
  */
-import { rmSync, readFileSync, existsSync } from "node:fs"
+import { rmSync, readFileSync, existsSync, accessSync, constants } from "node:fs"
 import * as P from "../tool/paul.ts"
 import { PaulPlugin } from "../src/index.ts"
 
@@ -62,6 +62,56 @@ const epic = J(await P.list.execute({}, ctx)).entries.find((e) => e.meta.externa
 ok(epic.type === "epic", "init: Epic issueType → type=epic")
 ok(epic.meta.complexity === "High" && epic.meta.priority === "Critical" && epic.meta.timeEstimate === "3d",
   "init: complexity/priority/timeEstimate stored in meta")
+
+// 4b) init docs[]: reference documentation indexed from an existing Confluence space.
+const DIR6 = "/tmp/opencode-paul-verify6"
+rmSync(DIR6, { recursive: true, force: true })
+const ctx6 = { worktree: DIR6, directory: DIR6 }
+const DOC = {
+  externalId: "12345", title: "arc42 — Building Block View",
+  summary: "Decomposes the firmware into strategy, perception and motion modules.",
+  docType: "spec", version: 3, url: "https://x/wiki/12345",
+  parentId: "12000", parentTitle: "arc42 Architecture Documentation",
+}
+const rd = J(await P.init.execute({ docs: [DOC] }, ctx6))
+ok(rd.imported.docs.added === 1, "init: docs[] imported and counted separately from meetings")
+const doc = J(await P.list.execute({ type: "doc" }, ctx6)).entries[0]
+ok(doc && doc.type === "doc" && doc.status === "done" && doc.details === DOC.summary,
+  "init: doc entry has type=doc, status=done, summary as details")
+ok(doc.meta.source === "confluence" && doc.meta.docType === "spec" && doc.meta.version === 3 &&
+   doc.meta.parentId === "12000" && doc.meta.parentTitle === DOC.parentTitle,
+  "init: docType/version/parent kept in meta (version drives skip-if-unchanged re-runs)")
+ok((doc.tags || []).includes("doc") && (doc.tags || []).includes("confluence"), "init: doc tagged confluence+doc")
+
+// A re-index bumps the version in place; omitted fields keep their stored value.
+const rd2 = J(await P.init.execute({
+  docs: [{ externalId: "12345", title: DOC.title, summary: "Now also covers the kicker subsystem.", version: 4 }],
+}, ctx6))
+const doc2 = J(await P.list.execute({ type: "doc" }, ctx6)).entries[0]
+ok(rd2.imported.docs.updated === 1 && J(await P.list.execute({}, ctx6)).entries.length === 1,
+  "init: docs[] dedupes by externalId — a re-index updates, never duplicates")
+ok(doc2.meta.version === 4 && doc2.meta.docType === "spec" && doc2.meta.url === DOC.url,
+  "init: partial doc re-index updates version without clobbering docType/url")
+
+// Docs go through the same roles scrub as everything else.
+await P.roles.execute({ people: [{ aliases: ["Karl"], role: "Backend Developer" }] }, ctx6)
+await P.init.execute({ docs: [{ externalId: "999", title: "Karl's runbook", summary: "Karl owns deploys." }] }, ctx6)
+ok(!/Karl/.test(readFileSync(DIR6 + "/.paul/memory.json", "utf8")), "init: docs[] scrubbed like every other write path")
+
+// And they survive the AGENTSMEMORY round-trip, listed under "Meetings & docs".
+const e6 = J(await P.export_page.execute({}, ctx6))
+const body6 = readFileSync(e6.bodyPath, "utf8")
+ok(body6.includes("Meetings &amp; docs (2)") && body6.includes("arc42 — Building Block View"),
+  "export_page: doc entries appear in the human summary")
+const DIR7 = "/tmp/opencode-paul-verify7"
+rmSync(DIR7, { recursive: true, force: true })
+const back = J(await P.list.execute({ type: "doc" },
+  (J(await P.import_page.execute({ pageBodyPath: e6.bodyPath }, { worktree: DIR7, directory: DIR7 })),
+   { worktree: DIR7, directory: DIR7 })))
+ok(back.entries.length === 2 && back.entries.some((x) => x.meta.version === 4),
+  "round-trip: doc entries and their version survive export_page -> import_page")
+rmSync(DIR6, { recursive: true, force: true })
+rmSync(DIR7, { recursive: true, force: true })
 
 // 5) Standard ticket format: rendering, validation, persistence.
 const FULL_SPEC = {
@@ -220,6 +270,45 @@ const roundTripped = J(await P.list.execute({}, ctx2)).entries.find((x) => x.met
 ok(roundTripped.meta.spec.approach.length === 2 && roundTripped.meta.spec.goal === "Narrower goal.",
   "round-trip: meta.spec survives export_page -> import_page")
 ok(body.includes("needs detail"), "export_page: incomplete tickets flagged in the human summary")
+
+// 8) The read-only doc-init entrypoints: prompt contract + executable scripts.
+const REPO = new URL("..", import.meta.url).pathname
+const PROMPT = REPO + "prompts/init_from_docs.md"
+ok(existsSync(PROMPT), "init_from_docs: prompt template exists")
+const prompt = existsSync(PROMPT) ? readFileSync(PROMPT, "utf8") : ""
+const FORBIDDEN = ["jira_create_issue", "jira_update_issue", "jira_transition_issue",
+  "jira_assign_issue", "jira_add_comment", "jira_delete_issue",
+  "confluence_create_page", "confluence_update_page", "confluence_delete_page"]
+ok(FORBIDDEN.every((t) => prompt.includes(t)),
+  "init_from_docs: every write tool is named in the read-only contract")
+ok(prompt.includes("paul_init") && prompt.includes("docs:") && prompt.includes("confluence_get_page_children"),
+  "init_from_docs: prompt persists via paul_init docs[] and walks page trees")
+ok(["{{CONFLUENCE_SPACE}}", "{{JIRA_PROJECT}}", "{{AGENTSMEMORY_TITLE}}", "{{MODE}}"]
+  .every((p) => prompt.includes(p)), "init_from_docs: all placeholders present for the renderers")
+
+const canRun = (p) => { try { accessSync(REPO + p, constants.X_OK); return true } catch { return false } }
+ok(canRun("scripts/init_from_docs.sh"), "init_from_docs.sh: present and executable")
+ok(canRun("scripts/install_command.sh"), "install_command.sh: present and executable")
+
+// The scripts must not need a `source` step — each loads paul.env when the env has no token.
+const SHIPPED_SCRIPTS = ["scripts/init_from_docs.sh", "process_meetings.sh", "scripts/reorder_board.sh"]
+ok(SHIPPED_SCRIPTS.every((p) => {
+  const s = readFileSync(REPO + p, "utf8")
+  return s.includes("paul.env") && s.includes('[ -z "${ATLASSIAN_API_TOKEN:-}" ]')
+}), "scripts load paul.env themselves (no manual `source` step)")
+
+// 9) Packaging: an npm install must ship everything the shipped scripts read at runtime.
+const pkg = JSON.parse(readFileSync(REPO + "package.json", "utf8"))
+const NEEDED = ["src/", "tool/", "scripts/", "prompts/"]
+const missingFiles = NEEDED.filter((d) => !(pkg.files || []).includes(d))
+ok(missingFiles.length === 0,
+  `package.json files[] ships every runtime dir${missingFiles.length ? ` (missing: ${missingFiles})` : ""}`)
+
+// Install URLs must agree with each other — a repo that does not exist breaks the quick start.
+const urlSources = ["README.md", "package.json"].map((f) => readFileSync(REPO + f, "utf8")).join("\n")
+const owners = [...urlSources.matchAll(/github(?:\.com\/|:)([\w-]+)\/opencode-paul/g)].map((m) => m[1])
+ok(owners.length > 0 && new Set(owners).size === 1,
+  `install URLs all name one repo owner (found: ${[...new Set(owners)].join(", ") || "none"})`)
 
 rmSync(DIR, { recursive: true, force: true })
 rmSync(DIR2, { recursive: true, force: true })

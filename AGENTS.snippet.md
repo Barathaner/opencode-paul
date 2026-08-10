@@ -15,7 +15,8 @@ and persists across sessions automatically.
 - `paul_cursor` — get/set the single "where are we now" roadmap pointer (phase/sprint + note).
 - `paul_roles`  — register people as project ROLES and scrub names out of text.
 - `paul_ticket_body` — render a ticket/action item/task into the STANDARD Jira description format.
-- `paul_init`   — index/initialize the store from Atlassian (Confluence docs + Jira tickets).
+- `paul_init`   — index/initialize the store from Atlassian: `docs[]` (specs, decisions,
+                  references), `meetings[]` (dated notes) and `tickets[]` (Jira issues).
 
 ## People are roles, never names
 
@@ -71,26 +72,43 @@ Persist the same spec fields through `paul_init`'s `tickets[]` (or pass `entryId
 `paul_ticket_body`) so they land in `meta.spec` and the description can be re-rendered later
 without the original transcript.
 
-## Initializing memory from Atlassian (paul_init)
-When asked to "init/index the project from Atlassian" (or on first setup), do this:
-1. Gather Jira state: use `jira_search` (JQL like `project = KAN ORDER BY created DESC`)
-   and `jira_get_issue` for details. Collect key, summary, status, issue type.
-2. Gather Confluence docs & PREVIOUS MEETINGS: use `confluence_search` (CQL, e.g.
-   `space = SOFTWAREEN AND type = page`) and `confluence_get_page` to read each
-   meeting/doc's body.
-3. SUMMARIZE each meeting/doc yourself into a short memory (decisions, action items,
-   current status on the topic).
-4. Derive the roadmap cursor (what phase/sprint the project is currently in).
-5. Call `paul_init` ONCE with `meetings[]`, `tickets[]`, `cursorPhase`, `cursorNote`.
-   Pass each item's stable `externalId` (Confluence page id / Jira key) so re-running
-   dedupes and updates in place. Use `reset: true` only for a clean full re-index.
-   For tickets also pass `order` and (when known) `complexity` (Low|Medium|High),
-   `priority` (Low|Medium|High|Critical), and `timeEstimate` (e.g. 2h, 1d) — these are
-   stored in `meta` and drive board ordering. Lower `order` = higher on the board.
-6. Map Jira statuses to: backlog|todo|in_progress|blocked|review|done.
+## Learning the project from documentation that already exists (paul_init)
 
-After init, `paul_list` + `paul_cursor` give the next session an instant, short view of
-the project's roadmap position and the gist of prior meetings.
+When asked to "init/index the project", "learn the project from the docs", or on first setup,
+run the read-only bootstrap. It READS Confluence and Jira and writes only PAUL memory — see
+`/paul-init-docs` or `scripts/init_from_docs.sh` for the full protocol.
+
+READ-ONLY. Never create or edit a Jira issue, never transition or assign one, and never
+create, edit or comment on a Confluence page. The single exception is the AGENTSMEMORY
+mirror page. Do not turn action items found in old documents into tickets — reading is not
+deciding, and someone already chose what became a ticket.
+
+1. Pull memory first (see the AGENTSMEMORY section below), then `paul_list` + `paul_cursor`,
+   so you know what is already indexed and at which `meta.version`.
+2. Register everyone you encounter with `paul_roles` before writing anything.
+3. Gather Confluence: `confluence_search` (CQL, e.g. `space = SOFTWAREEN AND type = page`),
+   paginated to the end. Documentation lives in TREES — for every page you keep, call
+   `confluence_get_page_children` and recurse to the leaves; an arc42 or architecture
+   document keeps its substance in the subpages. Skip pages whose version matches the stored
+   `meta.version`: they have not changed.
+4. Gather Jira: `jira_search` (JQL like `project = KAN ORDER BY created DESC`) plus
+   `jira_get_issue` for detail. Map statuses to backlog|todo|in_progress|blocked|review|done.
+5. SUMMARIZE each page and issue yourself — what it establishes, what is decided, what is
+   still open. Your summary is the memory; the page body is not copied.
+6. Derive the roadmap cursor (what phase/sprint the project is currently in).
+7. Call `paul_init` ONCE with `docs[]`, `meetings[]`, `tickets[]`, `cursorPhase`, `cursorNote`:
+   - `docs[]` — standing knowledge: specs, decision records, references, onboarding, process
+     pages. Fields: `externalId` (page id), `title`, `summary`, `docType`, `version`, `url`,
+     and `parentId`/`parentTitle` for subpages so the tree stays navigable.
+   - `meetings[]` — dated notes: meeting minutes, standups, retros, planning.
+   - `tickets[]` — Jira issues, with `order` and (when known) `complexity` (Low|Medium|High),
+     `priority` (Low|Medium|High|Critical) and `timeEstimate` (e.g. 2h, 1d). Lower `order` =
+     higher on the board. Pass spec fields through only where the issue actually states them.
+   Every item's `externalId` is the dedup key, so re-running updates in place. Use
+   `reset: true` only for a clean full re-index.
+
+After init, `paul_list` + `paul_cursor` give the next session an instant, short view of the
+project's roadmap position, its architecture docs, and the gist of prior meetings.
 
 ## Confluence AGENTSMEMORY sync (remote mirror, optional)
 PAUL memory can be mirrored to a Confluence page titled **AGENTSMEMORY**. The page holds a

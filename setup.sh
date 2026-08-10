@@ -12,6 +12,10 @@
 # Answers can be preset via env (interactive prompts are skipped for any that are set):
 #   JIRA_URL, JIRA_EMAIL, ATLASSIAN_API_TOKEN, JIRA_PROJECT, CONFLUENCE_SPACE
 #
+# Setup finishes by offering to index your Confluence space + Jira project into
+# PAUL memory (read-only apart from PAUL's own AGENTSMEMORY page). Set
+# PAUL_BOOTSTRAP=1 to always do it (works with NONINTERACTIVE=1), or 0 to skip.
+#
 set -uo pipefail
 
 # --- pretty output -----------------------------------------------------------
@@ -206,6 +210,15 @@ else
   ok "appended PAUL block to $AGENTS"
 fi
 
+# 5c-2. install the /paul-init-docs command (bootstrap memory from existing docs).
+if [ -x "$REPO_DIR/scripts/install_command.sh" ]; then
+  if "$REPO_DIR/scripts/install_command.sh" "$CONFLUENCE_SPACE" "$JIRA_PROJECT" >/dev/null 2>&1; then
+    ok "installed /paul-init-docs command ${DIM}(space $CONFLUENCE_SPACE, project $JIRA_PROJECT)${RST}"
+  else
+    warn "could not install the /paul-init-docs command (run scripts/install_command.sh by hand)"
+  fi
+fi
+
 # 5d. make sure the secrets file gets sourced by the user's shell.
 RC=""
 [ -n "${ZSH_VERSION:-}" ] && RC="$HOME/.zshrc"
@@ -223,16 +236,45 @@ if [ -f "$REPO_DIR/scripts/verify.mjs" ]; then
     | tail -1 | grep -q "0 failed" && ok "tool harness passed" || warn "harness reported issues (see: cd $REPO_DIR && npm test)"
 fi
 
+# --- teach PAUL the project you already have ---------------------------------
+# The last thing setup can do for you: read the Confluence space + Jira project
+# and index them into PAUL memory. It is read-only apart from PAUL's own
+# AGENTSMEMORY page, and safe to repeat, so offering it here costs nothing.
+BOOTSTRAP="${PAUL_BOOTSTRAP:-}"
+if [ -z "$BOOTSTRAP" ] && [ "$NONINTERACTIVE" != "1" ]; then
+  hdr "Index your existing documentation?"
+  echo "${DIM}Reads Confluence space $CONFLUENCE_SPACE and Jira project $JIRA_PROJECT, and writes"
+  echo "only PAUL memory + the AGENTSMEMORY page. Nothing else is created or edited.${RST}"
+  printf "   Index it into PAUL memory now? ${DIM}[y/N]${RST} "
+  read -r reply
+  case "$reply" in [Yy]*) BOOTSTRAP=1 ;; *) BOOTSTRAP=0 ;; esac
+fi
+
+if [ "$BOOTSTRAP" = "1" ]; then
+  if [ -x "$REPO_DIR/scripts/init_from_docs.sh" ]; then
+    "$REPO_DIR/scripts/init_from_docs.sh" \
+      && ok "PAUL memory indexed from your documentation" \
+      || warn "indexing did not finish (re-run: $REPO_DIR/scripts/init_from_docs.sh)"
+  else
+    warn "scripts/init_from_docs.sh not found/executable — skipping the index"
+  fi
+fi
+
 echo
 echo "${GRN}${BOLD}PAUL is set up.${RST}"
 echo
 echo "${BOLD}Next steps${RST}"
-echo "  1. Load the secrets into your current shell:"
-echo "       ${CYN}source \"$SECRETS\"${RST}   ${DIM}(new shells do this automatically)${RST}"
+if [ "$BOOTSTRAP" = "1" ]; then
+  echo "  1. Memory is indexed. Refresh it any time (unchanged pages are skipped):"
+else
+  echo "  1. Teach PAUL the project you already have (read-only, safe to repeat):"
+fi
+echo "       ${CYN}$REPO_DIR/scripts/init_from_docs.sh${RST}   ${DIM}or /paul-init-docs in a session${RST}"
 echo "  2. Try the meeting pipeline on the sample transcript:"
 echo "       ${CYN}$REPO_DIR/process_meetings.sh $REPO_DIR/examples/sample-transcript.json${RST}"
 echo "  3. Or just open OpenCode in any project and ask it to use the paul_* tools."
 echo
+echo "${DIM}The scripts load $SECRETS themselves — no 'source' needed.${RST}"
 echo "${DIM}Secrets:   $SECRETS (chmod 600, git-ignored)${RST}"
 echo "${DIM}Config:    $CONFIG${RST}"
 echo "${DIM}Tools:     $OPENCODE_DIR/tools/paul.ts${RST}"

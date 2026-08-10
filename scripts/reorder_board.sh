@@ -32,6 +32,12 @@
 
 set -uo pipefail
 
+# Secrets written by setup.sh, so no caller has to `source` them first. The
+# environment wins when it already carries a token, so an explicit override on
+# the command line is never clobbered.
+PAUL_ENV="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/paul.env"
+[ -z "${ATLASSIAN_API_TOKEN:-}" ] && [ -f "$PAUL_ENV" ] && . "$PAUL_ENV"
+
 PROJECT_DIR="${PAUL_PROJECT_DIR:-$HOME/opencode_automations/paul-project}"
 STORE="$PROJECT_DIR/.paul/memory.json"
 REORDER_STATUSES="${PAUL_REORDER_STATUSES:-todo backlog}"
