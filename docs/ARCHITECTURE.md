@@ -140,8 +140,8 @@ sequenceDiagram
     User->>Script: ./process_meetings.sh transcript.json
     Script->>Script: load paul.env, resolve MCP server for profile
     Script->>Script: sha256 dedup check against processed_files.csv
-    Script->>Script: jq -r '.segments[].text' (parse transcript)
-    Script->>Agent: opencode run --auto "<PHASE 0-4 prompt + transcript>"
+    Script->>Script: parse transcript with jq
+    Script->>Agent: run opencode with prompt and transcript
 
     Note over Agent,PAUL: PHASE 0 — load memory
     Agent->>PAUL: paul_remote()
@@ -150,20 +150,20 @@ sequenceDiagram
     Agent->>PAUL: paul_list() / paul_cursor()
 
     Note over Agent,PAUL: PHASE 0.5 — people are roles
-    Agent->>PAUL: paul_roles() (read vocabulary)
-    Agent->>PAUL: paul_roles({people: [...]}) (register aliases -> roles)
+    Agent->>PAUL: paul_roles() - read vocabulary
+    Agent->>PAUL: paul_roles() - register aliases to roles
 
     Note over Agent,Conf: PHASE 1 — meeting notes page
-    Agent->>Conf: confluence_search / create parent "Meeting Notes" folder (if missing)
-    Agent->>PAUL: paul_roles({scrub: body})
-    Agent->>Conf: confluence_create_page("Meeting Notes: <date>")
+    Agent->>Conf: confluence_search / create parent Meeting Notes folder
+    Agent->>PAUL: paul_roles() - scrub body
+    Agent->>Conf: confluence_create_page(Meeting Notes)
 
     Note over Agent,PAUL: PHASE 2 — action items -> Jira (per item)
-    Agent->>PAUL: paul_list(type="doc") - once; background candidates
+    Agent->>PAUL: paul_list(type=doc) - once, background candidates
     loop Each action item
-        Agent->>Agent: build TicketSpec (context, background<=3, goal,<br/>approach, acceptanceCriteria, ...)
+        Agent->>Agent: build TicketSpec
         Agent->>PAUL: paul_ticket_body(spec)
-        PAUL-->>Agent: {description, missing, spec}
+        PAUL-->>Agent: return description, missing, spec
         alt equivalent ticket already in paul_list
             Agent->>Agent: reuse existing Jira key (no create)
         else genuinely new
@@ -172,12 +172,12 @@ sequenceDiagram
     end
 
     Note over Agent,PAUL: PHASE 3 — record into PAUL
-    Agent->>PAUL: paul_init({meetings:[...], tickets:[...], cursorPhase, cursorNote})
+    Agent->>PAUL: paul_init()
 
     Note over Agent,Conf: PHASE 4 — push memory
     Agent->>PAUL: paul_export_page()
-    PAUL-->>Agent: {bodyPath}
-    Agent->>Conf: confluence_update_page(AGENTSMEMORY, body) (or create + paul_remote)
+    PAUL-->>Agent: return bodyPath
+    Agent->>Conf: confluence_update_page(AGENTSMEMORY, body)
 
     Agent-->>Script: exit 0
     Script->>Script: record file hash in processed_files.csv
@@ -185,7 +185,7 @@ sequenceDiagram
     Note over Script: PHASE 5 — board reorder (separate script)
     Script->>Script: scripts/reorder_board.sh
     alt PAUL_REORDER_APPLY=1
-        Script->>Jira: PUT /rest/agile/1.0/issue/rank (todo + backlog columns)
+        Script->>Jira: PUT /rest/agile/1.0/issue/rank
     else default
         Script->>Script: preview only, nothing written
     end
