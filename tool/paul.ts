@@ -5,9 +5,13 @@
  * knows where the project stands and can order tickets accordingly.
  *
  * Store location: <project-root>/.paul/memory.json  (git-trackable, per project)
+ * Roster:         <project-root>/.paul/roster.local.json  (name→role, LOCAL ONLY)
  * Tools exposed:  paul_list, paul_add, paul_update, paul_remove, paul_cursor,
- *                 paul_ticket_body, paul_init, paul_remote, paul_export_page,
- *                 paul_import_page
+ *                 paul_roles, paul_ticket_body, paul_init, paul_remote,
+ *                 paul_export_page, paul_import_page
+ *
+ * People are always referred to by their project role, never by name — see the
+ * "Roles instead of names" section below.
  */
 import { tool } from "@opencode-ai/plugin"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs"
@@ -22,7 +26,7 @@ type Entry = {
   order: number           // lower = higher priority in the board
   details?: string
   tags?: string[]
-  meta?: Record<string, unknown>  // freeform: jira key, assignee, sprint, links...
+  meta?: Record<string, unknown>  // freeform: jira key, role, sprint, links... (never a person's name)
   createdAt: string
   updatedAt: string
 }
@@ -57,6 +61,23 @@ type Store = {
   cursor: { phase: string; note: string; updatedAt: string }  // where we are on the roadmap
   entries: Entry[]
   remote?: { pageId?: string; spaceKey?: string; title?: string; lastSync?: string }  // Confluence AGENTSMEMORY page
+  roles?: string[]        // role vocabulary in use — role strings only, NEVER a person's name
+  updatedAt: string
+}
+
+/**
+ * The name → role roster.
+ *
+ * PAUL refers to people by their project role, never by name. This file is the
+ * one place real names exist, so it lives BESIDE the store rather than in it:
+ * `.paul/roster.local.json` is gitignored, never rendered into the Confluence
+ * mirror and never merged by import_page. Only the role vocabulary (no names)
+ * is kept in memory.json, so roles stay canonical across machines while the
+ * names never leave this host.
+ */
+type Roster = {
+  version: number
+  people: { role: string; aliases: string[] }[]
   updatedAt: string
 }
 
@@ -95,6 +116,102 @@ function save(path: string, store: Store): void {
   renameSync(tmp, path) // atomic replace
 }
 
+// ---- Roles instead of names --------------------------------------------------
+// People appear as project roles ("Backend Developer"), never as names. The rule
+// is enforced here rather than in a prompt: every write and render path runs its
+// values through scrubDeep, so a name the agent slipped in never reaches the
+// store, a Jira ticket, or the Confluence mirror.
+
+const DEFAULT_ROLES = [
+  "Product Owner", "Tech Lead", "Backend Developer", "Frontend Developer",
+  "Full-stack Developer", "QA Engineer", "Designer", "DevOps Engineer",
+  "Data Engineer", "Scrum Master", "Stakeholder", "Manager",
+]
+
+/** The role vocabulary: PAUL_ROLES (comma-separated) if set, else the defaults. */
+function roleVocabulary(): string[] {
+  const env = (process.env.PAUL_ROLES || "").split(",").map((r) => r.trim()).filter(Boolean)
+  return env.length ? env : DEFAULT_ROLES
+}
+
+function rosterPath(ctx: { worktree?: string; directory?: string }): string {
+  return join(dirname(storePath(ctx)), "roster.local.json")
+}
+
+function emptyRoster(): Roster {
+  return { version: 1, people: [], updatedAt: new Date().toISOString() }
+}
+
+function loadRoster(path: string): Roster {
+  if (!existsSync(path)) return emptyRoster()
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8"))
+    return { ...emptyRoster(), ...raw }
+  } catch (e) {
+    throw new Error(`PAUL roster at ${path} is corrupt: ${(e as Error).message}`)
+  }
+}
+
+function saveRoster(path: string, roster: Roster): void {
+  roster.updatedAt = new Date().toISOString()
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp-${process.pid}`
+  writeFileSync(tmp, JSON.stringify(roster, null, 2) + "\n", "utf8")
+  renameSync(tmp, path) // atomic replace
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * Replace every registered alias with its role.
+ *
+ * Longest alias first, so "Karl Jahnel" wins over "Karl". Case-sensitive and
+ * bounded by non-word characters, so an ordinary word that happens to match a
+ * short name in lowercase ("mark the item") is left alone. A trailing possessive
+ * is matched and carried over, covering both "Karl's idea" and the German
+ * "Karls Idee" — over-scrubbing a genuine plural is cheaper than leaking a name.
+ */
+function scrubNames(text: string, roster: Roster): { text: string; replaced: string[] } {
+  if (!text || !roster.people.length) return { text, replaced: [] }
+  const pairs: { alias: string; role: string }[] = []
+  for (const p of roster.people) for (const a of p.aliases || []) {
+    if (a && a.trim()) pairs.push({ alias: a.trim(), role: p.role })
+  }
+  pairs.sort((a, b) => b.alias.length - a.alias.length)
+
+  let out = text
+  const replaced: string[] = []
+  for (const { alias, role } of pairs) {
+    const re = new RegExp(`(^|[^\\w])${escapeRe(alias)}(['’]s|s)?(?![\\w])`, "g")
+    if (!re.test(out)) continue
+    re.lastIndex = 0
+    out = out.replace(re, (_m, pre, suffix) => `${pre}${role}${suffix || ""}`)
+    replaced.push(`${alias} → ${role}`)
+  }
+  return { text: out, replaced }
+}
+
+/** Scrub every string inside a value, recursing through arrays and objects. */
+function scrubDeep<T>(value: T, roster: Roster, replaced?: string[]): T {
+  if (!roster.people.length) return value
+  if (typeof value === "string") {
+    const r = scrubNames(value, roster)
+    if (replaced) for (const x of r.replaced) if (!replaced.includes(x)) replaced.push(x)
+    return r.text as unknown as T
+  }
+  if (Array.isArray(value)) return value.map((v) => scrubDeep(v, roster, replaced)) as unknown as T
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = scrubDeep(v, roster, replaced)
+    }
+    return out as unknown as T
+  }
+  return value
+}
+
 const S = tool.schema
 
 export const list = tool({
@@ -129,22 +246,24 @@ export const add = tool({
     order: S.number().optional().describe("Board priority; lower = higher. Default: appended to the end"),
     details: S.string().optional().describe("Longer description / context"),
     tags: S.array(S.string()).optional().describe("Tags for filtering, e.g. sprint-3, frontend"),
-    meta: S.record(S.string(), S.any()).optional().describe("Freeform metadata: jiraKey, assignee, sprint, links, etc."),
+    meta: S.record(S.string(), S.any()).optional().describe(
+      "Freeform metadata: jiraKey, role, sprint, links, etc. Refer to people by ROLE, never by name."),
   },
   async execute(args, ctx) {
     const path = storePath(ctx as any)
     const store = load(path)
+    const roster = loadRoster(rosterPath(ctx as any))
     const now = new Date().toISOString()
     const maxOrder = store.entries.reduce((m, e) => Math.max(m, e.order), 0)
     const entry: Entry = {
       id: randomUUID().slice(0, 8),
       type: args.type,
-      title: args.title,
+      title: scrubDeep(args.title, roster),
       status: args.status || "todo",
       order: args.order ?? maxOrder + 10,
-      details: args.details,
+      details: scrubDeep(args.details, roster),
       tags: args.tags,
-      meta: args.meta as Record<string, unknown> | undefined,
+      meta: scrubDeep(args.meta, roster) as Record<string, unknown> | undefined,
       createdAt: now,
       updatedAt: now,
     }
@@ -171,15 +290,18 @@ export const update = tool({
   async execute(args, ctx) {
     const path = storePath(ctx as any)
     const store = load(path)
+    const roster = loadRoster(rosterPath(ctx as any))
     const e = store.entries.find((x) => x.id === args.id)
     if (!e) return JSON.stringify({ error: `No entry with id ${args.id}` })
     if (args.type !== undefined) e.type = args.type
-    if (args.title !== undefined) e.title = args.title
+    if (args.title !== undefined) e.title = scrubDeep(args.title, roster)
     if (args.status !== undefined) e.status = args.status
     if (args.order !== undefined) e.order = args.order
-    if (args.details !== undefined) e.details = args.details
+    if (args.details !== undefined) e.details = scrubDeep(args.details, roster)
     if (args.tags !== undefined) e.tags = args.tags
-    if (args.meta !== undefined) e.meta = { ...(e.meta || {}), ...(args.meta as Record<string, unknown>) }
+    if (args.meta !== undefined) {
+      e.meta = { ...(e.meta || {}), ...scrubDeep(args.meta as Record<string, unknown>, roster) }
+    }
     e.updatedAt = new Date().toISOString()
     save(path, store)
     return JSON.stringify({ updated: e }, null, 2)
@@ -221,6 +343,79 @@ export const cursor = tool({
     store.cursor.updatedAt = new Date().toISOString()
     save(path, store)
     return JSON.stringify({ cursor: store.cursor }, null, 2)
+  },
+})
+
+export const roles = tool({
+  description:
+    "Register the people in this project as ROLES and scrub names out of text. PAUL never uses real " +
+    "names — a person is always their project role (e.g. 'Backend Developer'). Call this FIRST, before " +
+    "writing anything: pass every person who speaks or is named in the source material with the aliases " +
+    "they appear under and the role you infer for them. Roles must come from the configured vocabulary " +
+    "(call with no args to read it); anyone who does not fit gets a stable 'Participant N'. Afterwards " +
+    "PAUL rewrites those names to roles in everything it stores or renders. For text you send to " +
+    "Confluence or Jira YOURSELF rather than through PAUL, pass it as 'scrub' and use the returned text. " +
+    "The name→role map is stored locally in .paul/roster.local.json and is never exported or committed.",
+  args: {
+    people: S.array(S.object({
+      aliases: S.array(S.string()).describe(
+        "Every spelling this person appears under, e.g. ['Karl Jahnel', 'Karl', 'KJ']"),
+      role: S.string().optional().describe(
+        "Their project role, from the vocabulary. Omit or pass an unlisted role to get a 'Participant N'."),
+    })).optional().describe("People to register or update"),
+    scrub: S.string().optional().describe("Text to rewrite: every registered name becomes its role"),
+  },
+  async execute(args, ctx) {
+    const rpath = rosterPath(ctx as any)
+    const roster = loadRoster(rpath)
+    const vocabulary = roleVocabulary()
+
+    const nextParticipant = () => {
+      const used = roster.people
+        .map((p) => /^Participant (\d+)$/.exec(p.role))
+        .filter(Boolean)
+        .map((m) => Number(m![1]))
+      return `Participant ${Math.max(0, ...used) + 1}`
+    }
+
+    let changed = false
+    for (const p of args.people || []) {
+      const aliases = (p.aliases || []).map((a) => String(a).trim()).filter(Boolean)
+      if (!aliases.length) continue
+      const existing = roster.people.find((x) => x.aliases.some((a) => aliases.includes(a)))
+      // A role only counts if it is in the vocabulary — otherwise roles drift
+      // between runs ("Backend Developer" one week, "Backend Dev" the next).
+      const asked = (p.role || "").trim().toLowerCase()
+      const role = vocabulary.find((v) => v.toLowerCase() === asked)
+        || existing?.role
+        || nextParticipant()
+      if (existing) {
+        existing.role = role
+        for (const a of aliases) if (!existing.aliases.includes(a)) existing.aliases.push(a)
+      } else {
+        roster.people.push({ role, aliases })
+      }
+      changed = true
+    }
+    if (changed) saveRoster(rpath, roster)
+
+    // memory.json keeps the role vocabulary in use — role strings only, no names.
+    const spath = storePath(ctx as any)
+    const store = load(spath)
+    const inUse = [...new Set(roster.people.map((p) => p.role))].sort()
+    if (changed || JSON.stringify(store.roles || []) !== JSON.stringify(inUse)) {
+      store.roles = inUse
+      save(spath, store)
+    }
+
+    const result: Record<string, unknown> = {
+      vocabulary,
+      rolesInUse: inUse,
+      people: roster.people,
+      rosterPath: rpath,
+    }
+    if (args.scrub !== undefined) result.scrubbed = scrubNames(args.scrub, roster)
+    return JSON.stringify(result, null, 2)
   },
 })
 
@@ -353,7 +548,10 @@ export const ticket_body = tool({
     entryId: S.string().optional().describe("PAUL entry id to persist this spec onto (meta.spec)"),
   },
   async execute(args, ctx) {
-    const spec = specFrom(args as Record<string, unknown>) || { specVersion: TICKET_FORMAT_VERSION }
+    const roster = loadRoster(rosterPath(ctx as any))
+    const replaced: string[] = []
+    const raw = specFrom(args as Record<string, unknown>) || { specVersion: TICKET_FORMAT_VERSION }
+    const spec = scrubDeep(raw, roster, replaced)
     const description = renderTicketDescription(spec)
     const missing = validateSpec(spec)
 
@@ -364,13 +562,13 @@ export const ticket_body = tool({
       const e = store.entries.find((x) => x.id === args.entryId)
       if (!e) return JSON.stringify({ error: `No entry with id ${args.entryId}`, description, missing })
       e.meta = { ...(e.meta || {}), spec: { ...((e.meta?.spec as TicketSpec) || {}), ...spec } }
-      if (args.title) e.title = args.title
+      if (args.title) e.title = scrubDeep(args.title, roster, replaced)
       e.updatedAt = new Date().toISOString()
       save(path, store)
       persisted = e.id
     }
 
-    return JSON.stringify({ description, missing, spec, persisted }, null, 2)
+    return JSON.stringify({ description, missing, spec, persisted, scrubbed: replaced }, null, 2)
   },
 })
 
@@ -408,9 +606,13 @@ export const init = tool({
       "(context/goal/approach/acceptanceCriteria/... — see paul_ticket_body) so the structured spec " +
       "is stored in meta.spec and the body can be re-rendered identically later."),
   },
-  async execute(args, ctx) {
+  async execute(rawArgs, ctx) {
     const path = storePath(ctx as any)
     const store = load(path)
+    const roster = loadRoster(rosterPath(ctx as any))
+    const scrubbed: string[] = []
+    // Everything imported passes through the roles scrub before it is stored.
+    const args = scrubDeep(rawArgs, roster, scrubbed)
     const now = new Date().toISOString()
 
     if (args.reset) store.entries = []
@@ -511,6 +713,7 @@ export const init = tool({
       imported: result,
       totalEntries: store.entries.length,
       cursor: store.cursor,
+      scrubbed,
     }, null, 2)
   },
 })
@@ -525,7 +728,10 @@ function esc(s: string): string {
   return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
-function renderPageBody(store: Store): string {
+function renderPageBody(store: Store, roster: Roster): string {
+  // Entries are scrubbed on write; scrubbing again here is the last gate before
+  // anything leaves this machine for Confluence.
+  store = scrubDeep(store, roster)
   const now = new Date().toISOString()
   const tix = store.entries.filter((e) => (e.meta as any)?.source === "jira" || e.type === "ticket" || e.type === "epic")
   const mtgs = store.entries.filter((e) => (e.meta as any)?.source === "confluence" || e.type === "meeting")
@@ -640,7 +846,7 @@ export const export_page = tool({
   async execute(_args, ctx) {
     const path = storePath(ctx as any)
     const store = load(path)
-    const body = renderPageBody(store)
+    const body = renderPageBody(store, loadRoster(rosterPath(ctx as any)))
     const bodyPath = join(dirname(path), "agentsmemory.storage.html")
     writeFileSync(bodyPath, body, "utf8")
     store.remote = store.remote || { title: "AGENTSMEMORY" }
@@ -686,10 +892,13 @@ export const import_page = tool({
     if (!body) {
       return JSON.stringify({ error: "Provide either pageBody or pageBodyPath." })
     }
-    const remoteData = extractStoreJson(body)
-    if (!remoteData) {
+    const parsed = extractStoreJson(body)
+    if (!parsed) {
       return JSON.stringify({ error: "No PAUL memory JSON block found in page body. Nothing merged." })
     }
+    // A teammate's leaked name must not land here either.
+    const scrubbed: string[] = []
+    const remoteData = scrubDeep(parsed, loadRoster(rosterPath(ctx as any)), scrubbed)
 
     const keyOf = (e: { id?: string; meta?: any }) => (e.meta?.externalId as string) || e.id!
     const local = new Map<string, Entry>()
@@ -730,6 +939,7 @@ export const import_page = tool({
       cursorUpdated,
       totalEntries: store.entries.length,
       cursor: store.cursor,
+      scrubbed,
     }, null, 2)
   },
 })

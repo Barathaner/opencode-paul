@@ -6,10 +6,10 @@
  * implementations used by the drop-in custom-tool file (`tool/paul.ts`),
  * so the plugin and the copy-a-file install path never drift.
  *
- * When OpenCode loads this plugin it registers ten tools, named to match
+ * When OpenCode loads this plugin it registers eleven tools, named to match
  * the custom-tool convention (`<filename>_<export>` → `paul_<export>`):
  *
- *   paul_list, paul_add, paul_update, paul_remove, paul_cursor,
+ *   paul_list, paul_add, paul_update, paul_remove, paul_cursor, paul_roles,
  *   paul_ticket_body, paul_init, paul_remote, paul_export_page, paul_import_page
  */
 import type { Plugin } from "@opencode-ai/plugin"
@@ -19,6 +19,7 @@ import {
   update,
   remove,
   cursor,
+  roles,
   ticket_body,
   init,
   remote,
@@ -33,6 +34,7 @@ export const PaulPlugin: Plugin = async () => ({
     paul_update: update,
     paul_remove: remove,
     paul_cursor: cursor,
+    paul_roles: roles,
     paul_ticket_body: ticket_body,
     paul_init: init,
     paul_remote: remote,

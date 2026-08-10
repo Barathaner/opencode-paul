@@ -96,7 +96,7 @@ fi
 # Copy the self-contained tool file (drop-in path — always works, no npm needed).
 mkdir -p "$OPENCODE_DIR/tools"
 cp "$REPO_DIR/tool/paul.ts" "$OPENCODE_DIR/tools/paul.ts"
-ok "installed tools/paul.ts (9 paul_* tools)"
+ok "installed tools/paul.ts (11 paul_* tools)"
 
 # --- 3. collect Atlassian credentials ---------------------------------------
 hdr "3/6  Atlassian connection"

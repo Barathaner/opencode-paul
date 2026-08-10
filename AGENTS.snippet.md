@@ -9,12 +9,35 @@ and persists across sessions automatically.
 ## Tools
 - `paul_list`   — read entries (roadmap items, epics, tickets, milestones, blockers),
                   sorted by `order`; filter by type/status/tag. Also returns the cursor.
-- `paul_add`    — create an entry (type, title, status, order, tags, meta like jiraKey/assignee).
+- `paul_add`    — create an entry (type, title, status, order, tags, meta like jiraKey/role).
 - `paul_update` — change an entry by id (move status, re-order the board, attach meta).
 - `paul_remove` — delete an entry by id.
 - `paul_cursor` — get/set the single "where are we now" roadmap pointer (phase/sprint + note).
+- `paul_roles`  — register people as project ROLES and scrub names out of text.
 - `paul_ticket_body` — render a ticket/action item/task into the STANDARD Jira description format.
 - `paul_init`   — index/initialize the store from Atlassian (Confluence docs + Jira tickets).
+
+## People are roles, never names
+
+PAUL never writes a real name. Everyone is their project role — "Backend Developer",
+"Product Owner" — in notes, tickets, memory and the Confluence mirror.
+
+1. Before writing anything, call `paul_roles` (no args) to read the role vocabulary and anyone
+   already registered.
+2. List every person who speaks or is mentioned in your source material, infer each one's role,
+   and register them with every spelling they appear under:
+   `paul_roles({ people: [{ aliases: ["Karl Jahnel", "Karl", "KJ"], role: "Backend Developer" }] })`.
+   Reuse the role someone already has. A person who fits no vocabulary role gets a stable
+   `Participant N` — omit `role` for them.
+3. From then on write ROLES only. Never put a real name in a tool call, a page, or a Jira field.
+4. For text you send to Confluence or Jira **yourself** rather than through PAUL, pass it through
+   `paul_roles({ scrub: "<text>" })` first and use the returned text.
+
+PAUL rewrites names it recognises on every write and render path, but that is a safety net under
+your own discipline — it cannot catch a person nobody registered.
+
+The name→role map lives in `.paul/roster.local.json`, which is gitignored and never exported.
+`memory.json` holds only the role vocabulary. Never copy a name out of the roster into anything else.
 
 ## Ticket format (tickets, action items, tasks)
 
@@ -98,7 +121,8 @@ PUSH AFTER — whenever you change local memory (paul_add/update/remove/cursor/i
    (todo → in_progress → review → done | blocked), and update `paul_cursor`
    when the project moves to a new phase/sprint.
 4. Add new tickets/epics with `paul_add`; delete obsolete ones with `paul_remove`.
-5. Store external references in `meta` (e.g. `{ "jiraKey": "PAUL-12", "assignee": "karl" }`).
+5. Store external references in `meta` (e.g. `{ "jiraKey": "PAUL-12", "role": "Backend Developer" }`).
+   Never a person's name — see "People are roles, never names" above.
 
 Keep the store authoritative and current — it is how the next session knows the roadmap position.
 <!-- paul-project-memory:end -->

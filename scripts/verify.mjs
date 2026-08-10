@@ -17,8 +17,8 @@ let pass = 0, fail = 0
 const ok = (c, m) => { c ? (pass++, console.log("PASS " + m)) : (fail++, console.log("FAIL " + m)) }
 const J = (s) => JSON.parse(s)
 
-// 1) All ten tools present with valid Zod-4 arg schemas.
-const names = ["list", "add", "update", "remove", "cursor", "ticket_body", "init", "remote", "export_page", "import_page"]
+// 1) All eleven tools present with valid Zod-4 arg schemas.
+const names = ["list", "add", "update", "remove", "cursor", "roles", "ticket_body", "init", "remote", "export_page", "import_page"]
 for (const n of names) {
   const d = P[n]
   let good = !!d
@@ -26,12 +26,12 @@ for (const n of names) {
   ok(good, `paul_${n}: present + schema valid`)
 }
 
-// 2) Plugin wrapper exposes all ten under paul_* names.
+// 2) Plugin wrapper exposes all eleven under paul_* names.
 const hooks = await PaulPlugin({}, {})
 const wanted = names.map((n) => (n === "list" ? "paul_list" : `paul_${n}`))
 const registered = Object.keys(hooks.tool || {})
-ok(wanted.every((w) => registered.includes(w)) && registered.length === 10,
-  `plugin registers all 10 tools (${registered.length}): ${registered.join(", ")}`)
+ok(wanted.every((w) => registered.includes(w)) && registered.length === 11,
+  `plugin registers all 11 tools (${registered.length}): ${registered.join(", ")}`)
 
 const DIR = "/tmp/opencode-paul-verify"
 rmSync(DIR, { recursive: true, force: true })
@@ -127,7 +127,79 @@ ok(specced.meta.spec.goal === "Narrower goal." && specced.meta.spec.context === 
 // A ticket imported without a spec: the mirror must flag it as unsolvable-as-written.
 await P.init.execute({ tickets: [{ externalId: "KAN-9", title: "No spec", status: "todo" }] }, ctx)
 
-// 6) Confluence AGENTSMEMORY round-trip.
+// 6) Roles instead of names: roster, vocabulary, scrub, and every write path.
+const DIR4 = "/tmp/opencode-paul-verify4"
+rmSync(DIR4, { recursive: true, force: true })
+const ctx4 = { worktree: DIR4, directory: DIR4 }
+const hasName = (s) => /Karl|Sarah|KJ/.test(typeof s === "string" ? s : JSON.stringify(s))
+
+const reg = J(await P.roles.execute({ people: [
+  { aliases: ["Karl Jahnel", "Karl", "KJ"], role: "Backend Developer" },
+  { aliases: ["Sarah"], role: "Chief Wizard" },   // not in the vocabulary
+] }, ctx4))
+const roleOf = (alias, r = reg) => r.people.find((p) => p.aliases.includes(alias))?.role
+ok(roleOf("Karl") === "Backend Developer", "roles: a vocabulary role is accepted")
+ok(roleOf("Sarah") === "Participant 1", "roles: an unlisted role becomes Participant N")
+ok(roleOf("Sarah", J(await P.roles.execute({ people: [{ aliases: ["Sarah"] }] }, ctx4))) === "Participant 1",
+  "roles: Participant numbering is stable across calls")
+
+const sc = J(await P.roles.execute({ scrub:
+  "Karl Jahnel briefed KJ and Sarah. Karls Idee, Sarah's call. karl stays lowercase. Karlsruhe stays."
+}, ctx4)).scrubbed
+ok(sc.text.startsWith("Backend Developer briefed Backend Developer and Participant 1."),
+  "scrub: longest alias wins, every alias maps to the role")
+ok(sc.text.includes("Backend Developers Idee") && sc.text.includes("Participant 1's call"),
+  "scrub: possessives carried over (English and German)")
+ok(sc.text.includes("karl stays lowercase") && sc.text.includes("Karlsruhe stays"),
+  "scrub: case-sensitive and word-bounded — no false positives")
+
+ok(existsSync(DIR4 + "/.paul/roster.local.json"), "roles: names live in roster.local.json")
+const mem4 = () => readFileSync(DIR4 + "/.paul/memory.json", "utf8")
+ok(mem4().includes("Backend Developer") && !hasName(mem4()),
+  "roles: memory.json keeps the role vocabulary and no names")
+
+process.env.PAUL_ROLES = "Chief Wizard,Goblin"
+const vocab = J(await P.roles.execute({}, ctx4)).vocabulary
+delete process.env.PAUL_ROLES
+ok(vocab.length === 2 && vocab[0] === "Chief Wizard", "roles: PAUL_ROLES overrides the vocabulary")
+
+const added4 = J(await P.add.execute(
+  { type: "ticket", title: "Karl fixes auth", details: "Sarah reviews", meta: { note: "KJ again" } }, ctx4)).added
+ok(!hasName(added4), "add: scrubs title, details and meta")
+ok(!hasName(J(await P.update.execute({ id: added4.id, title: "KJ retries", details: "Karl's fix" }, ctx4)).updated),
+  "update: scrubs title and details")
+
+const tb = J(await P.ticket_body.execute(
+  { ...FULL_SPEC, context: "Karl found it", goal: "Sarah signs off" }, ctx4))
+ok(!hasName(tb.description) && tb.scrubbed.length === 2,
+  "ticket_body: scrubs the spec before rendering and reports the swaps")
+
+const ini = J(await P.init.execute({
+  tickets: [{ externalId: "KAN-7", title: "Karl task", context: "KJ said so" }],
+  meetings: [{ externalId: "pg7", title: "Sync", summary: "Sarah spoke" }],
+}, ctx4))
+ok(ini.scrubbed.length > 0 && !hasName(mem4()), "init: scrubs everything imported, no name reaches the store")
+
+const e4 = J(await P.export_page.execute({}, ctx4))
+ok(!hasName(readFileSync(e4.bodyPath, "utf8")), "export_page: no name in the Confluence body")
+
+// A teammate's leaked name must not land here either.
+const DIR5 = "/tmp/opencode-paul-verify5"
+rmSync(DIR5, { recursive: true, force: true })
+const ctx5 = { worktree: DIR5, directory: DIR5 }
+await P.roles.execute({ people: [{ aliases: ["Karl"], role: "Backend Developer" }] }, ctx5)
+const leaked = `<![CDATA[${JSON.stringify({ version: 1, project: "P",
+  cursor: { phase: "P1", note: "", updatedAt: "2026-01-01T00:00:00Z" },
+  entries: [{ id: "z1", type: "ticket", title: "Karl ships it", status: "todo", order: 10,
+              createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" }] })}]]>`
+const impR = J(await P.import_page.execute({ pageBody: leaked }, ctx5))
+ok(impR.merged.added === 1 && !hasName(readFileSync(DIR5 + "/.paul/memory.json", "utf8")),
+  "import_page: scrubs incoming remote entries")
+
+rmSync(DIR4, { recursive: true, force: true })
+rmSync(DIR5, { recursive: true, force: true })
+
+// 7) Confluence AGENTSMEMORY round-trip.
 const e = J(await P.export_page.execute({}, ctx))
 ok(existsSync(e.bodyPath) && e.body === undefined, "export_page: file-based (no inline body)")
 const body = readFileSync(e.bodyPath, "utf8")

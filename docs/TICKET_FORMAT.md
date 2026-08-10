@@ -62,7 +62,9 @@ Meeting Notes: 2026-08-10 (<confluence url>)
 | `source` | string | yes | meeting page title + URL |
 | `derived` | string[] | no | which fields PAUL proposed rather than took from the meeting |
 
-No owner or assignee field exists, by design — PAUL never assigns tickets.
+No owner or assignee field exists, by design — PAUL never assigns tickets. People referred to in
+`context`, `goal` or anywhere else are named by their **project role**, never their real name; the
+renderer scrubs any name it recognises. See [`ROLES.md`](./ROLES.md).
 
 ## Filling it in: derive, do not blank
 

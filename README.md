@@ -22,7 +22,7 @@ cd opencode-paul
 `setup.sh` will:
 
 1. Check/install prerequisites (`jq`, `curl`, Node, `opencode`, `uvx`).
-2. Install PAUL's ten tools into `~/.config/opencode/tools/`.
+2. Install PAUL's eleven tools into `~/.config/opencode/tools/`.
 3. Ask for your **Atlassian base URL, email, API token**, Jira project key and Confluence
    space (get a token at
    [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)).
@@ -46,7 +46,7 @@ NONINTERACTIVE=1 JIRA_URL=https://you.atlassian.net JIRA_EMAIL=you@example.com \
 ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN ./setup.sh
 ```
 
-## What you get — ten tools
+## What you get — eleven tools
 
 | Tool | Purpose |
 |------|---------|
@@ -55,6 +55,7 @@ ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN ./setup.sh
 | `paul_update` | Change an entry by id — move status, re-order the board, merge `meta`. |
 | `paul_remove` | Delete an entry by id. |
 | `paul_cursor` | Get/set the single "where are we now" pointer (phase/sprint + note). |
+| `paul_roles` | Register people as project [roles](./docs/ROLES.md) and scrub real names out of text. |
 | `paul_ticket_body` | Render a ticket/action item/task into the [standard format](./docs/TICKET_FORMAT.md) and report missing fields. |
 | `paul_init` | Seed the store from Atlassian (Jira tickets + Confluence meeting summaries), deduped by `externalId`. |
 | `paul_remote` | Get/set the pointer to the Confluence **AGENTSMEMORY** mirror page. |
@@ -106,6 +107,33 @@ assigns tickets.
 The structured spec is stored in each entry's `meta.spec`, so any later run can re-render an
 identical description without the original transcript. Full reference:
 [`docs/TICKET_FORMAT.md`](./docs/TICKET_FORMAT.md).
+
+## Roles instead of names
+
+PAUL never writes a person's real name. Everyone is their **project role** — "Backend Developer",
+"Product Owner" — in meeting notes, tickets, memory and the Confluence mirror. Meeting transcripts
+are full of names and everything downstream of one is shared, so the rule is enforced in code
+rather than in a prompt: PAUL keeps a name→role roster and rewrites names to roles inside every
+value it stores or renders.
+
+```jsonc
+// the agent registers people first, then never names them again
+paul_roles({ people: [
+  { aliases: ["Karl Jahnel", "Karl", "KJ"], role: "Backend Developer" },
+  { aliases: ["Sarah"] }                       // fits no role → "Participant 1"
+]})
+
+// "Karl found the Okta bug"  ->  "Backend Developer found the Okta bug"
+```
+
+The roster is the one place real names still exist, so it lives in
+`.paul/roster.local.json` — gitignored, never exported to Confluence, never merged by
+`paul_import_page`. `memory.json` keeps only the role vocabulary, so roles stay canonical across
+machines while names never leave the host. Roles come from a built-in list overridable with
+`PAUL_ROLES`; anyone who fits none of them becomes a stable `Participant N`.
+
+The meeting notes page carries the overview, decisions and action items — the verbatim transcript
+is never uploaded and never logged. Full reference: [`docs/ROLES.md`](./docs/ROLES.md).
 
 ## Manual install (advanced)
 
@@ -200,8 +228,11 @@ What each run does, in order:
 1. **Pull memory** — imports the shared `AGENTSMEMORY` Confluence page and loads
    `paul_list` / `paul_cursor`, so the agent knows every prior meeting, existing ticket,
    and the current roadmap phase.
-2. **Meeting notes** — creates a `Meeting Notes: <date>` Confluence page in your space.
-3. **Action items → Jira, standard format, deduped** — extracts action items, builds a
+2. **People → roles** — registers everyone who speaks or is named in the transcript as a
+   project role via `paul_roles`, so nothing written from here on carries a real name.
+3. **Meeting notes** — creates a `Meeting Notes: <date>` Confluence page in your space with
+   the overview, key decisions and action items. The verbatim transcript is not uploaded.
+4. **Action items → Jira, standard format, deduped** — extracts action items, builds a
    ticket spec for each (context, goal, a numbered approach, acceptance criteria, complexity,
    priority, estimate), renders it through `paul_ticket_body` and sends that body to Jira
    verbatim. Only *new* tickets are created; ones PAUL already tracks are reused and their
@@ -209,14 +240,14 @@ What each run does, in order:
    the old script re-created the same tickets on every run.) Only summary + description are
    sent — no priority field, no timetracking, no labels, no assignment — which avoids
    project-specific field-scheme errors. See [the ticket format](#the-ticket-format).
-4. **Record into PAUL** — `paul_init` writes the meeting summary + tickets into the store.
+5. **Record into PAUL** — `paul_init` writes the meeting summary + tickets into the store.
    **Complexity** (Low/Medium/High), **Priority** (Low/Medium/High/Critical) and the
    **Time estimate** are carried in PAUL `meta`, and the full spec in `meta.spec` so the
    description can be re-rendered later without the transcript. The agent assigns each
    ticket a PAUL `order` from those attributes.
-5. **Push memory** — exports and updates the `AGENTSMEMORY` page, so the next run — or a
+6. **Push memory** — exports and updates the `AGENTSMEMORY` page, so the next run — or a
    teammate on another machine — starts from this meeting's state.
-6. **Reorder the Jira board** — `scripts/reorder_board.sh` ranks the board to match PAUL's
+7. **Reorder the Jira board** — `scripts/reorder_board.sh` ranks the board to match PAUL's
    `order`, so in the Atlassian web UI the **open / "Zu erledigen"** column (and a
    **backlog** column if present) show tickets top-to-bottom in do-this-first order. It
    only reranks `todo` + `backlog`; `in_progress`, `review`, `blocked` and `done` are left
@@ -237,8 +268,9 @@ All paths and keys are environment-overridable (defaults in parentheses):
 | `PAUL_CONFLUENCE_SPACE` | `SOFTWAREEN` | Confluence space key |
 | `PAUL_JIRA_PROJECT` | `KAN` | Jira project key |
 | `PAUL_AGENTSMEMORY_TITLE` | `AGENTSMEMORY` | shared memory page title |
+| `PAUL_ROLES` | built-in list | comma-separated [role vocabulary](./docs/ROLES.md) people are mapped to |
 
-**Board reorder** (`scripts/reorder_board.sh`, called automatically in step 6, also runnable
+**Board reorder** (`scripts/reorder_board.sh`, called automatically in step 7, also runnable
 standalone) needs Jira REST credentials — reuse your Atlassian ones:
 
 | Env var | Purpose |
@@ -284,8 +316,8 @@ drift). Run the harness (no OpenCode agent loop / model endpoint required):
 npm test          # node --experimental-strip-types scripts/verify.mjs
 ```
 
-It exercises all ten tools plus the plugin registration and the ticket renderer against
-throwaway stores.
+It exercises all eleven tools plus the plugin registration, the ticket renderer and the
+name→role scrub against throwaway stores.
 
 ## Notes & gotchas
 

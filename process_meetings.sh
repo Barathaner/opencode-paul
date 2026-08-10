@@ -26,6 +26,12 @@
 #   PAUL_CONFLUENCE_SPACE   Confluence space key                       (SOFTWAREEN)
 #   PAUL_JIRA_PROJECT       Jira project key                           (KAN)
 #   PAUL_AGENTSMEMORY_TITLE title of the shared memory page            (AGENTSMEMORY)
+#   PAUL_ROLES              comma-separated role vocabulary            (built-in defaults)
+#
+# People are never named. Every participant is registered as a project role via
+# paul_roles, and PAUL rewrites names to roles in everything it stores or renders.
+# The name->role map stays in <project>/.paul/roster.local.json, which this script
+# gitignores; the transcript itself is never uploaded and never logged.
 
 set -uo pipefail
 
@@ -40,6 +46,10 @@ CONFLUENCE_SPACE="${PAUL_CONFLUENCE_SPACE:-SOFTWAREEN}"
 JIRA_PROJECT="${PAUL_JIRA_PROJECT:-KAN}"
 AGENTSMEMORY_TITLE="${PAUL_AGENTSMEMORY_TITLE:-AGENTSMEMORY}"
 
+# Role vocabulary the agent must pick people's roles from (comma-separated).
+# Exported so the PAUL tools running inside OpenCode see it; unset = built-in defaults.
+[ -n "${PAUL_ROLES:-}" ] && export PAUL_ROLES
+
 LOG_FILE="$LOG_DIR/meeting_pipeline.log"
 PROCESSED_TRACKER="$LOG_DIR/processed_files.csv"
 
@@ -50,6 +60,12 @@ mkdir -p "$LOG_DIR" "$PROJECT_DIR"
 # .paul/memory.json is the SAME store across every run.
 if [ ! -d "$PROJECT_DIR/.git" ]; then
   git -C "$PROJECT_DIR" init -q 2>/dev/null || true
+fi
+
+# The name->role roster is the one file that still holds real names. Keep it out
+# of git: memory.json is meant to be committed, roster.local.json never is.
+if ! grep -qsF ".paul/roster.local.json" "$PROJECT_DIR/.gitignore"; then
+  echo ".paul/roster.local.json" >> "$PROJECT_DIR/.gitignore"
 fi
 
 # Create tracking CSV if it doesn't exist
@@ -98,9 +114,10 @@ if [ -z "$TRANSCRIPT_TEXT" ]; then
 fi
 
 LINE_COUNT=$(echo "$TRANSCRIPT_TEXT" | wc -l)
-log "Transcript successfully parsed ($LINE_COUNT lines)."
-log "Transcript Content Preview:"
-echo "$TRANSCRIPT_TEXT" | head -n 5 | tee -a "$LOG_FILE"
+CHAR_COUNT=$(printf '%s' "$TRANSCRIPT_TEXT" | wc -c)
+# Deliberately NOT logging transcript content: it contains real names, and the
+# whole point of the roles layer is that those stay out of every artifact.
+log "Transcript successfully parsed ($LINE_COUNT lines, $CHAR_COUNT chars)."
 
 MEETING_DATE="$(date +'%Y-%m-%d %H:%M')"
 log "Invoking OpenCode CLI ($OPENCODE_BIN) with PAUL memory integration..."
@@ -110,8 +127,8 @@ log "Invoking OpenCode CLI ($OPENCODE_BIN) with PAUL memory integration..."
 read -r -d '' PROMPT <<EOF
 You are an AI project manager assistant with PAUL structured memory. PAUL is your
 per-project memory (tools: paul_list, paul_add, paul_update, paul_remove,
-paul_cursor, paul_ticket_body, paul_init, paul_remote, paul_export_page,
-paul_import_page). Work
+paul_cursor, paul_roles, paul_ticket_body, paul_init, paul_remote,
+paul_export_page, paul_import_page). Work
 through these phases IN ORDER and use the mcp-atlassian tools for all Confluence/Jira I/O.
 
 PHASE 0 — LOAD MEMORY (pull first, before doing anything else):
@@ -123,13 +140,28 @@ PHASE 0 — LOAD MEMORY (pull first, before doing anything else):
   the current roadmap phase. You will use this to AVOID creating duplicate Jira
   tasks for action items that already exist.
 
+PHASE 0.5 — PEOPLE ARE ROLES, NEVER NAMES (do this before writing ANYTHING):
+- Call paul_roles (no args) to read the role vocabulary and anyone already registered.
+- Read the transcript and list EVERY person who speaks or is mentioned. For each one,
+  infer their project role from what they do and say, and collect every spelling they
+  appear under (full name, first name, nickname, initials).
+- Call paul_roles ONCE with people: [{ aliases: ["<every spelling>"], role: "<role from
+  the vocabulary>" }, ...]. Reuse the role someone is already registered under. If nobody
+  fits a vocabulary role, omit role and they become a stable "Participant N".
+- From here on refer to people ONLY by role — in the notes page, in ticket text, and in
+  PAUL memory. Never write a real name into any tool call, any page, or any Jira field.
+  PAUL rewrites names it recognises, but that is a safety net, not your excuse.
+
 PHASE 1 — MEETING NOTES PAGE:
-- Create a Confluence page in space "$CONFLUENCE_SPACE" titled "Meeting Notes: $MEETING_DATE"
-  containing: an overview, the key decisions, the extracted action items, and the
-  formatted transcript. Remember the returned pageId and page URL.
+- Compose the page body: an overview, the key decisions, and the extracted action items.
+  DO NOT include the transcript — it is never uploaded.
 - List each action item with the SAME fields you will put on its ticket in PHASE 2, so
   the page and the board agree: Title, Goal (one sentence), and the line
   "Complexity: <C> | Priority: <P> | Estimate: <T>".
+- Pass the finished body through paul_roles(scrub: "<body>") and use the returned text.
+  You are writing this page directly via mcp-atlassian, so this is the only gate.
+- Create the page in space "$CONFLUENCE_SPACE" titled "Meeting Notes: $MEETING_DATE" with
+  that scrubbed body. Remember the returned pageId and page URL.
 
 PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PAUL):
 - Extract every action item from the transcript.
@@ -139,6 +171,7 @@ PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PA
   * priority:           Low | Medium | High | Critical (business urgency).
   * timeEstimate:       Jira-style string, e.g. "2h", "1d", "3d".
   * context:            why this exists — the background and facts from the transcript.
+                        Name people by ROLE only, e.g. "the Backend Developer raised this".
   * goal:               ONE sentence describing what "done" means.
   * approach:           a NUMBERED PLAN of concrete steps that solve the task — the same
                         way you would plan the work yourself before starting it. Each step
