@@ -6,7 +6,9 @@
 # summarize it, and write what it learned into PAUL memory:
 #   1. Pull the shared AGENTSMEMORY page so a re-run updates instead of duplicating.
 #   2. Read every page in the space (following documentation trees into their subpages)
-#      and every issue in the project.
+#      and every issue the selected boards show — or every issue in the project when no
+#      board is configured. A board scope that cannot be resolved aborts the run rather
+#      than widening to the whole project; --no-board is the deliberate way to ask for it.
 #   3. Summarize each doc / meeting / ticket and persist it via a single paul_init call,
 #      plus the roadmap cursor: where the project stands right now.
 #   4. Push the updated AGENTSMEMORY page.
@@ -173,22 +175,53 @@ fi
 
 # A board id alone does not narrow a search — its saved filter does. Resolve the ids
 # to filter ids when they did not come pre-resolved from setup.sh (i.e. --board).
+# Records what could NOT be resolved, because an empty filter list silently means
+# "the whole project" further down, and that is the one outcome nobody asked for.
+UNRESOLVED_BOARDS=""
+RESOLVE_BLOCKER=""
 resolve_board_filters() {
   local id out f n base="${PAUL_JIRA_URL:-}"
   base="${base%/}"
   [ -n "$JIRA_BOARDS" ] && [ -z "$JIRA_BOARD_FILTERS" ] || return 0
-  command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
-  [ -n "$base" ] && [ -n "${PAUL_JIRA_EMAIL:-}" ] && [ -n "${ATLASSIAN_API_TOKEN:-}" ] || return 0
+  if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    RESOLVE_BLOCKER="curl and jq are required to look a board's filter up"
+    UNRESOLVED_BOARDS="$JIRA_BOARDS"; return 0
+  fi
+  if [ -z "$base" ] || [ -z "${PAUL_JIRA_EMAIL:-}" ] || [ -z "${ATLASSIAN_API_TOKEN:-}" ]; then
+    RESOLVE_BLOCKER="no Atlassian credentials in this shell (PAUL_JIRA_URL / PAUL_JIRA_EMAIL / ATLASSIAN_API_TOKEN)"
+    UNRESOLVED_BOARDS="$JIRA_BOARDS"; return 0
+  fi
   for id in $(printf '%s' "$JIRA_BOARDS" | tr ',;' '  '); do
     out=$(curl -sS -u "$PAUL_JIRA_EMAIL:$ATLASSIAN_API_TOKEN" -H "Accept: application/json" \
-      "$base/rest/agile/1.0/board/$id/configuration" 2>/dev/null) || continue
+      "$base/rest/agile/1.0/board/$id/configuration" 2>/dev/null)
     f=$(printf '%s' "$out" | jq -r '.filter.id // empty' 2>/dev/null)
     n=$(printf '%s' "$out" | jq -r '.name // empty' 2>/dev/null)
-    [ -n "$f" ] && JIRA_BOARD_FILTERS="${JIRA_BOARD_FILTERS:+$JIRA_BOARD_FILTERS,}$f"
+    if [ -z "$f" ]; then
+      UNRESOLVED_BOARDS="${UNRESOLVED_BOARDS:+$UNRESOLVED_BOARDS,}$id"
+      continue
+    fi
+    JIRA_BOARD_FILTERS="${JIRA_BOARD_FILTERS:+$JIRA_BOARD_FILTERS,}$f"
     [ -n "$n" ] && JIRA_BOARD_NAMES="${JIRA_BOARD_NAMES:+$JIRA_BOARD_NAMES,}$n"
   done
 }
 resolve_board_filters
+
+# Boards were asked for and NONE of them narrowed the search. Falling through here would
+# index every ticket in the project while the log still named the boards — the run would
+# look right and quietly pull in the boards the user excluded. Stop instead; the only way
+# to index the whole project is to ask for it with --no-board.
+if [ -n "$JIRA_BOARDS" ] && [ -z "$JIRA_BOARD_FILTERS" ]; then
+  echo "ERROR: cannot scope the index to board(s) $JIRA_BOARDS — no filter could be resolved." >&2
+  [ -n "$RESOLVE_BLOCKER" ] && echo "       $RESOLVE_BLOCKER" >&2
+  [ -z "$RESOLVE_BLOCKER" ] && echo "       GET /rest/agile/1.0/board/<id>/configuration failed or is not permitted for your account." >&2
+  echo "       Fix access and re-run, or pass --no-board to index the WHOLE project deliberately." >&2
+  exit 3
+fi
+# Partly resolved: continue with what did resolve. Narrower than asked is survivable and
+# visible; wider is not, which is why only this direction is a warning.
+if [ -n "$UNRESOLVED_BOARDS" ]; then
+  echo "WARN: board(s) $UNRESOLVED_BOARDS could not be resolved and are NOT included in this index." >&2
+fi
 
 # The search the agent runs. Without a board scope this is the string PAUL always used.
 build_jql() {
@@ -232,7 +265,7 @@ render_prompt() {
 PROMPT="$(render_prompt)"
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "--- DRY RUN: rendered prompt (space=$CONFLUENCE_SPACE project=$JIRA_PROJECT boards=${JIRA_BOARDS:-none} reset=$RESET) ---"
+  echo "--- DRY RUN: rendered prompt (space=$CONFLUENCE_SPACE project=$JIRA_PROJECT boards=${JIRA_BOARDS:-none} filters=${JIRA_BOARD_FILTERS:-none} reset=$RESET) ---"
   echo "$PROMPT"
   echo "--- DRY RUN: nothing was called, nothing was written ---"
   exit 0
@@ -246,7 +279,15 @@ if [ ! -f "$OPENCODE_BIN" ]; then
   exit 1
 fi
 
-log "Space: $CONFLUENCE_SPACE | Jira project: $JIRA_PROJECT | boards: ${JIRA_BOARD_NAMES:-${JIRA_BOARDS:-all}} | reset: $RESET"
+# Name the filter ids, not just the board names: the filters are what the JQL actually
+# carries, so this line can never claim a scope the search does not have.
+if [ -n "$JIRA_BOARD_FILTERS" ]; then
+  SCOPE_LINE="boards: ${JIRA_BOARD_NAMES:-$JIRA_BOARDS} (filters $JIRA_BOARD_FILTERS)"
+else
+  SCOPE_LINE="boards: none — the WHOLE project"
+fi
+log "Space: $CONFLUENCE_SPACE | Jira project: $JIRA_PROJECT | $SCOPE_LINE | reset: $RESET"
+log "Jira search: $JIRA_JQL"
 log "PAUL store: $PROJECT_DIR/.paul/memory.json"
 log "Read-only: no Jira issue and no Confluence page other than $AGENTSMEMORY_TITLE will be written."
 log "Invoking OpenCode CLI ($OPENCODE_BIN)..."

@@ -487,6 +487,21 @@ ok(renderers.every((s) => /JIRA_JQL\\\}\\\}/.test(s) && /JIRA_SCOPE\\\}\\\}/.tes
 ok(prompt.includes("{{JIRA_JQL}}") && !prompt.includes("ORDER BY created DESC. Page"),
   "init_from_docs prompt takes its JQL from the renderer instead of hardcoding the project")
 
+// Two ways the run could still read the whole project while looking board-scoped.
+// jira_get_project_issues takes a PROJECT KEY, so it cannot carry a board filter.
+ok(!/^ *jira_search, jira_get_issue, jira_get_project_issues/m.test(prompt)
+   && /jira_get_project_issues is NOT on that list/.test(prompt)
+   && /Do not call jira_get_project_issues/.test(prompt),
+  "init_from_docs: jira_get_project_issues is excluded — it cannot honour the board scope")
+const initSh = readFileSync(REPO + "scripts/init_from_docs.sh", "utf8")
+ok(/cannot scope the index to board\(s\)/.test(initSh) && /exit 3/.test(initSh)
+   && /--no-board to index the WHOLE project/.test(initSh),
+  "init_from_docs.sh aborts when a configured board scope resolves to nothing (never widens)")
+ok(/UNRESOLVED_BOARDS/.test(initSh) && /are NOT included in this index/.test(initSh),
+  "init_from_docs.sh names the boards it could not resolve instead of dropping them silently")
+ok(/log "Jira search: \$JIRA_JQL"/.test(initSh),
+  "init_from_docs.sh logs the JQL it actually runs, so the log cannot overstate the scope")
+
 // AGENTS.md is what the model actually reads. It used to be written once and skipped on
 // every re-run, with the default keys baked in — so paul.env said one project and the
 // agent was told another, for good.

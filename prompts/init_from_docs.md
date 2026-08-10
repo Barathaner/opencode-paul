@@ -11,7 +11,11 @@ PHASE 0 — THE READ-ONLY CONTRACT (this governs every later phase):
 
 You may READ anything:
   confluence_search, confluence_get_page, confluence_get_page_children, confluence_get_comments,
-  jira_search, jira_get_issue, jira_get_project_issues, jira_get_transitions.
+  jira_search, jira_get_issue, jira_get_transitions.
+
+jira_get_project_issues is NOT on that list. It takes a project key, so it cannot honour the board
+scope this run was given, and calling it would index tickets from boards the user excluded. Every
+Jira read goes through jira_search with the JQL in PHASE 3.
 
 You must NOT call any of these, at any point, for any reason:
   jira_create_issue, jira_batch_create_issues, jira_update_issue, jira_delete_issue,
@@ -76,7 +80,10 @@ Confluence — the space "{{CONFLUENCE_SPACE}}":
 - Ignore the AGENTSMEMORY page itself as a source; it is memory, not documentation.
 
 Jira — the project "{{JIRA_PROJECT}}"{{JIRA_SCOPE}}:
-- jira_search with jql: {{JIRA_JQL}}. Page through all
+- jira_search with jql: {{JIRA_JQL}}. This exact JQL, every time — it is what limits the run to the
+  boards that were chosen. Do not call jira_get_project_issues and do not "simplify" the query to
+  project = ... alone; either one pulls in tickets from boards this run is meant to leave out.
+- Page through all
   results — the first call returns a page, not the project. RECORD THE TOTAL the search reports
   and keep requesting the next page until you have that many issues. Use jira_get_issue where you
   need the full description.

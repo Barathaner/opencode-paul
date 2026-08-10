@@ -26,38 +26,56 @@ cd opencode-paul
 3. Ask for your **Atlassian base URL, email, API token**, Jira project key and Confluence
    space (get a token at
    [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)).
+   Every interactive run asks every question, including the token, so rotating a token or moving
+   to another site is just a re-run. Your current answers come back as the defaults — press Enter
+   to keep one.
 4. **Validate** the credentials against the Jira API, and check that the Jira project and
    Confluence space you named actually exist — a key that does not exist authenticates fine and
    then fails on every ticket hours later. Set `PAUL_SKIP_CHECKS=1` to bypass (restricted tokens).
-5. Write the token to a private `~/.config/opencode/paul.env` (chmod 600, git-ignored) and
+5. List the **boards** of that Jira project and ask which ones PAUL should use. One project often
+   carries several — one per team, one for bugs — and they are not interchangeable: each shows its
+   own subset and can rank with its own field. Answer with the line numbers, the board ids, `all`
+   or `none`. The pick scopes both the board reorder and what gets indexed.
+6. Write everything to a private `~/.config/opencode/paul.env` (chmod 600, git-ignored) and
    merge the `mcp-atlassian` server + PAUL plugin into `opencode.json` **non-destructively**
    (your existing config is backed up first; the token is stored as `{env:...}`, never inline).
-6. Append the PAUL behavior block to your `AGENTS.md`, install the `/paul-init-docs` command,
-   install the checkout's test dependencies, run the test harness, and confirm `mcp-atlassian`
-   starts (which also warms the `uvx` cache, so your first OpenCode run does not stall).
-7. Ask **what PAUL may change** on a project other people already run — may it rewrite an existing
+7. Install the PAUL behavior block into your `AGENTS.md` — **refreshed on every run**, between its
+   markers, so the agent is told the same space, project and search the scripts use; anything you
+   wrote outside the markers is untouched. Then install the `/paul-init-docs` command, install the
+   checkout's test dependencies, run the test harness, and confirm `mcp-atlassian` starts (which
+   also warms the `uvx` cache, so your first OpenCode run does not stall).
+8. Ask **what PAUL may change** on a project other people already run — may it rewrite an existing
    Jira ticket's description, may it re-rank your board, and which product names the name-scrub must
    never touch. Both permissions default to *no*.
-8. Offer to **index your existing Confluence space and Jira project into PAUL memory** — read-only
+9. Offer to **index your existing Confluence space and Jira project into PAUL memory** — read-only
    apart from PAUL's own mirror page. Say yes and PAUL already knows your project when you open
    OpenCode.
 
 Every answer lands in `~/.config/opencode/paul.env`, which every PAUL script reads. **That file is
 where to change your mind** — re-running `setup.sh` keeps whatever you set there.
 
-That is the whole setup. There is no `source` step: every script loads
-`~/.config/opencode/paul.env` itself. To try the meeting pipeline on the bundled sample:
+That is the whole setup. There is no `source` step in a new shell: every script loads
+`~/.config/opencode/paul.env` itself. In the terminal you ran setup *in*, values exported before
+the run still win over the file — setup tells you when that applies and prints the `source` line.
+To try the meeting pipeline on the bundled sample:
 
 ```bash
 ./process_meetings.sh examples/sample-transcript.json
 ```
 
 Re-running `setup.sh` is safe (idempotent). Prefer no prompts? Preset the answers — add
-`PAUL_BOOTSTRAP=1` to index the docs in the same run:
+`PAUL_BOOTSTRAP=1` to index the docs in the same run, and `JIRA_BOARDS` to pick boards by id:
 
 ```bash
 NONINTERACTIVE=1 JIRA_URL=https://you.atlassian.net JIRA_EMAIL=you@example.com \
-ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN ./setup.sh
+ATLASSIAN_API_TOKEN=xxxx JIRA_PROJECT=KAN CONFLUENCE_SPACE=SOFTWAREEN JIRA_BOARDS=12,21 ./setup.sh
+```
+
+Running a **second** PAUL for another project or another Atlassian site? Give it a profile, and
+the first install stays exactly as it is — see [More than one PAUL](#more-than-one-paul-paul_profile):
+
+```bash
+PAUL_PROFILE=siteb ./setup.sh
 ```
 
 ## What you get — eleven tools
@@ -238,6 +256,9 @@ data to PAUL. Wire the MCP server in your `opencode.json`:
 ```
 
 Never hardcode tokens — use `{env:VAR}` and export the real value from your shell profile.
+`setup.sh` writes this block for you, keyed `mcp-atlassian`; a profile gets its own server
+(`mcp-atlassian-<profile>`) with its own URL and its own `{env:ATLASSIAN_API_TOKEN_<PROFILE>}`,
+so two Atlassian sites can sit side by side in one `opencode.json`.
 
 ## Bootstrap from the docs you already have (`scripts/init_from_docs.sh`)
 
@@ -247,18 +268,28 @@ every page in the space, following documentation trees into their subpages, plus
 project — summarize it, and write what it learned into PAUL memory:
 
 If you picked boards during setup, "every issue in the project" narrows to what those boards show —
-their saved filters scope the search, so it follows the board rather than a JQL string frozen at
-setup time. `--board 12,21` overrides the selection for one run, `--no-board` ignores it.
+their saved filters scope the search (`project = "VXF" AND (filter = 101 OR filter = 103)`), so it
+follows the board rather than a JQL string frozen at setup time. `--board 12,21` overrides the
+selection for one run, `--no-board` ignores it.
 
 ```bash
 ./scripts/init_from_docs.sh              # incremental — safe to repeat
 ./scripts/init_from_docs.sh --reset      # rebuild memory from scratch
 ./scripts/init_from_docs.sh --dry-run    # print the prompt, call nothing
 ./scripts/init_from_docs.sh --board 12   # index only what board 12 shows
+./scripts/init_from_docs.sh --no-board   # index the whole project on purpose
 ```
 
-Inside an OpenCode session, the same protocol runs as `/paul-init-docs` (installed by `setup.sh`;
-re-generate it after changing your space or project key with `./scripts/install_command.sh`).
+**A board scope that cannot be resolved aborts the run** (exit 3) instead of falling back to the
+whole project — no credentials, no permission on the board's configuration, or a board that no
+longer exists. Widening silently would fill memory with tickets from the boards you excluded and
+the log would still name the boards you asked for. Resolve fewer boards than asked and it warns and
+continues with what resolved; the log prints the filter ids and the exact JQL, so it can never claim
+a scope the search does not have.
+
+Inside an OpenCode session, the same protocol runs as `/paul-init-docs` (installed by `setup.sh`,
+and re-generated by every `setup.sh` run; `./scripts/install_command.sh` regenerates it on its own).
+Under a profile it is `/paul-init-docs-<profile>`.
 
 **It is read-only by contract**: it never creates or edits a Jira issue, never transitions, assigns
 or re-ranks one, and never touches a Confluence page other than the `AGENTSMEMORY` mirror. It does
@@ -465,6 +496,13 @@ doc-init prompt still names every forbidden write tool.
 - The Confluence mirror embeds the machine state as a hidden CDATA JSON block so round-trips
   are lossless even though Confluence strips HTML comment markers on save. Never hand-edit it.
 - `@opencode-ai/plugin` is a **peer** dependency — it ships with OpenCode; you don't install it.
+- The terminal you ran `setup.sh` in still exports the settings it had at launch, and without a
+  profile those beat `paul.env`. Open a new shell, or `source ~/.config/opencode/paul.env`, after
+  changing an answer. Setup says so when it applies.
+- `AGENTS.md` is what the agent actually reads. `setup.sh` refreshes PAUL's block there on every
+  run — if it ever disagrees with `paul.env`, the block is stale and a re-run fixes it.
+- A board scope that cannot be resolved is a hard error, and so is an unknown `PAUL_PROFILE`.
+  Neither falls back to something broader; that fallback is what points a run at the wrong tickets.
 
 ## License
 
