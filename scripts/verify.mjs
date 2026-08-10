@@ -194,6 +194,8 @@ ok(J(await P.init.execute({ tickets: [{ externalId: "KAN-9", title: "T9 is back"
 const covBody = readFileSync(J(await P.export_page.execute({}, ctx9)).bodyPath, "utf8")
 ok(covBody.includes("<h2>Coverage</h2>") && covBody.includes("9 indexed"),
   "export_page: the mirror states what the last index covered")
+ok(!covBody.includes("&amp;middot;") && !covBody.includes("&amp;mdash;"),
+  "export_page: HTML entities in the coverage banner are not double-escaped")
 rmSync(DIR9, { recursive: true, force: true })
 
 // 5) Standard ticket format: rendering, validation, persistence.

@@ -92,6 +92,15 @@ jq '.coverage' "$PAUL_PROJECT_DIR/.paul/memory.json"
 A declared gap is fine — restricted permissions, a huge space, an interrupted run. A silent one is
 what causes duplicate tickets.
 
+**Expect gaps on a mature Jira project.** Newer Jira Cloud instances return `total: -1` from the
+search API rather than a real count, so the agent cannot confirm it reached the end by counting. On
+a real project this produced `jira: source reports 342, store has 126 indexed + 2 skipped — 214
+unaccounted for`, where the missing issues were long-closed tickets nobody needs in memory. That is
+the system behaving correctly: it does not know they are irrelevant, so it says so rather than
+implying full coverage. To close such a gap deliberately, index the closed issues too, or narrow
+what you consider in scope — e.g. `jql: project = KAN AND statusCategory != Done` with
+`jiraExpected` set to that same filtered total.
+
 ## Stale entries
 
 Once coverage reconciles for a source, "PAUL did not see it this run" means "it is no longer there".

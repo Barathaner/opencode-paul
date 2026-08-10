@@ -80,6 +80,10 @@ Jira — the project "{{JIRA_PROJECT}}":
   results — the first call returns a page, not the project. RECORD THE TOTAL the search reports
   and keep requesting the next page until you have that many issues. Use jira_get_issue where you
   need the full description.
+- Newer Jira Cloud returns total: -1 instead of a count. When that happens, keep paginating until a
+  page comes back empty or short, and report jiraExpected as the number of issues you actually
+  enumerated — never a guess derived from the highest issue key, which counts issues that were
+  deleted or moved and manufactures a gap that does not exist.
 - Map each Jira status onto exactly one PAUL status: backlog | todo | in_progress | blocked |
   review | done.
 - Note the issue type (Task, Story, Bug, Epic) and the issue URL.

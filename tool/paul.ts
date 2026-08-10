@@ -988,7 +988,10 @@ function renderPageBody(store: Store, roster: Roster): string {
     const part = (label: string, c?: { expected?: number; indexed: number; skipped: number }) =>
       c ? `${label}: ${c.indexed} indexed${c.skipped ? `, ${c.skipped} skipped` : ""}${c.expected !== undefined ? ` of ${c.expected}` : ""}` : ""
     const parts = [part("Jira", cv.jira), part("Confluence", cv.confluence)].filter(Boolean)
-    html += `<h2>Coverage</h2><p><strong>Last indexed:</strong> ${esc(cv.checkedAt)}<br/>${esc(parts.join(" &middot; "))}</p>`
+    // Escape each part, then join with the raw entity — escaping the joined string
+    // would publish a literal "&amp;middot;".
+    html += `<h2>Coverage</h2><p><strong>Last indexed:</strong> ${esc(cv.checkedAt)}<br/>` +
+      `${parts.map(esc).join(" &middot; ")}</p>`
     if (cv.gaps?.length) {
       html += `<p><strong>Incomplete — this page is not the whole project:</strong></p><ul>`
       for (const g of cv.gaps) html += `<li>${esc(g)}</li>`
