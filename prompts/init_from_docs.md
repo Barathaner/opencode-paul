@@ -136,11 +136,8 @@ SCOPE — WHICH TREES ARE IN{{CONFLUENCE_SCOPE}}:
   descendant, followed through parent_id in the tree you already fetched. No extra calls: the tree
   has the whole structure. A page outside those trees is out of scope: it is neither indexed nor
   listed in skipped[], because it was never in the run.
-- confluenceExpected is then the number of pages IN SCOPE, not total_pages. Pass total_pages as
-  confluenceTotal alongside it, so the space size stays visible and a deliberately scoped run is
-  distinguishable from one that got truncated.
-- This is what makes "complete" mean something. "I read the whole space" cannot be verified on a
-  large space; "I read these trees, all of them" can.
+- confluenceExpected is the number of pages IN SCOPE, not total_pages — pass that so the final
+  report can name a gap if pages you should have read are missing from the store.
 
 HOW DEEPLY TO READ — RECENCY APPLIES TO EVENTS, NOT TO STANDING DOCUMENTS:
 - For MEETING pages, weight by age: `0.5 ^ (age_in_days / {{MEETING_HALFLIFE_DAYS}})`. Use the date
@@ -199,9 +196,9 @@ session cannot tell which half to trust. If a page is thin, its summary is thin.
 Call paul_init ONCE with:
   * mergePaths: ["<every .paul/init-*.json a subagent reported>"] — the branch results. Pass the
     paths, not the contents: paul_init reads the files, dedupes them against each other and against
-    anything you pass inline, and folds each file's skipped[] into coverage. Entries you produced
-    yourself (a branch you handled inline, the Jira tickets) still go in the arrays below; the two
-    sources merge.
+    anything you pass inline by externalId, and folds each file's skipped[] into the coverage
+    report. Entries you produced yourself (a branch you handled inline, the Jira tickets) still go
+    in the arrays below; the two sources merge.
   * docs:     [{ externalId: "<Confluence page id>", title: "<page title>",
                  summary: "<your summary>", docType: "spec|decision|reference|onboarding|process",
                  version: <Confluence page version number>, url: "<page url>",
@@ -215,25 +212,18 @@ Call paul_init ONCE with:
                  order: <computed>, issueType: "<type>", url: "<issue url>", details: "<one line>" }]
   * cursorPhase / cursorNote: where the project stands right now, derived from what you read — the
     current phase or sprint, and one short note on the current focus and the next step.
-  * coverage: { jiraExpected: <{{JIRA_EXPECTED}}, or your enumerated count if that reads "unknown">,
+  * coverage (optional, report-only — it does not change what gets stored): {
+                jiraExpected: <{{JIRA_EXPECTED}}, or your enumerated count if that reads "unknown">,
                 confluenceExpected: <pages IN SCOPE — the chosen trees and their descendants;
                                      equal to total_pages when no root is configured>,
-                confluenceTotal: <total_pages from the space page tree, scoped or not>,
-                complete: <true only if the Jira search ran out of next_page_token AND the page
-                           tree came back without has_more>,
                 skipped: [{ externalId, title, reason, source }] }
-    confluenceExpected is what gets reconciled, so it must count the same pages the run was asked
-    to read. Passing the space total on a scoped run reports every out-of-scope page as missing,
-    which makes a correct run look broken and hides a run that really is.
+    Every entry is upserted by externalId regardless of coverage — that dedup is unconditional, not
+    something coverage unlocks. Coverage only lets the final report name a gap ("Jira reports 54,
+    only 40 landed") so a human can go look, rather than that gap staying silent. Give it your best
+    numbers; there is no downside to passing it and no ceremony required to get it right.
     Every page or issue you chose not to index goes in skipped[] with its reason ("template",
-    "space home", "empty stub", "the memory page itself"). PAUL subtracts indexed + skipped from
-    the expected total and records whatever is left over as a gap.
-
-COVERAGE IS NOT A FORMALITY. PAUL's promise is that it will not create a ticket that already
-exists, and it checks that against what it has indexed. An issue you never read looks new, so it
-gets duplicated. Do not guess the totals, do not set complete: true because the run felt thorough,
-and do not quietly drop the pages that looked boring — list them in skipped[] with a reason. A
-declared gap is fine. A silent one is what causes duplicate tickets weeks later.
+    "space home", "empty stub", "the memory page itself") so the report can tell a deliberate skip
+    from something nobody looked at.
 {{MODE}}
 Ticket `order` (lower = higher on the board): rank by priority first (Critical < High < Medium <
 Low), then by complexity/estimate as a tiebreak, respecting stated dependencies. Assign ascending
@@ -261,6 +251,6 @@ EXPLICIT NON-GOALS — do not do these even though they may look helpful:
 - Do NOT upload page content anywhere. Your summaries are the artifact.
 
 FINISH by reporting, in plain text: how many docs, meetings and tickets you indexed, how many were
-new versus updated, which pages you skipped and why, the roadmap cursor you set, the coverage
-paul_init reported back — including any gaps it found and anything it marked stale — and,
-explicitly, confirmation that the only write outside PAUL memory was the AGENTSMEMORY page.
+new versus updated, which pages you skipped and why, the roadmap cursor you set, the coverage gaps
+paul_init reported back (if any), and, explicitly, confirmation that the only write outside PAUL
+memory was the AGENTSMEMORY page.

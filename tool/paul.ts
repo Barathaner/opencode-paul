@@ -56,20 +56,16 @@ type TicketSpec = {
 }
 
 /**
- * What the last index actually saw.
- *
- * PAUL's promise — "do not create a ticket that already exists" — is only as good
- * as its coverage: an issue it never read looks new, and gets duplicated. So an
- * index records how many items the source reported against how many landed in the
- * store, and which ones were skipped on purpose. A gap is data, not an error, but
- * it must be visible rather than silent.
+ * What the last index reported it saw. This is a REPORT, not state: it is
+ * returned to the caller from paul_init and is not persisted or acted on. The
+ * dedup guarantee (no duplicate ticket for an externalId already in the store)
+ * comes from the upsert-by-externalId map below and does not depend on this —
+ * coverage only tells a human how much of the source the run actually read.
  */
-type Coverage = {
+type CoverageReport = {
   checkedAt: string
-  complete: boolean          // caller asserted full coverage AND no gap was found
   jira?: { expected?: number; indexed: number; skipped: number }
   confluence?: { expected?: number; indexed: number; skipped: number }
-  confluenceTotal?: number   // whole-space page count; context for a scoped index, never reconciled
   skipped?: { externalId: string; title?: string; reason: string; source?: string }[]
   gaps?: string[]            // human-readable description of every unexplained difference
 }
@@ -81,7 +77,6 @@ type Store = {
   entries: Entry[]
   remote?: { pageId?: string; spaceKey?: string; title?: string; lastSync?: string }  // Confluence AGENTSMEMORY page
   roles?: string[]        // role vocabulary in use — role strings only, NEVER a person's name
-  coverage?: Coverage     // what the last paul_init actually managed to see
   updatedAt: string
 }
 
@@ -302,15 +297,11 @@ export const list = tool({
   description:
     "List PAUL project-memory entries (roadmap/ticket/milestone state) for the current project, " +
     "sorted by 'order'. Read this at the start of work to know where the project stands. " +
-    "Optionally filter by type, status, or tag. Also returns the roadmap cursor (current phase) and " +
-    "the coverage of the last index — if coverage reports gaps, this list is NOT the whole project " +
-    "and you must not conclude from it that something does not exist yet.",
+    "Optionally filter by type, status, or tag. Also returns the roadmap cursor (current phase).",
   args: {
     type: S.string().optional().describe("Filter by entry type, e.g. ticket, epic, milestone, blocker"),
     status: S.string().optional().describe("Filter by status, e.g. todo, in_progress, blocked, done"),
     tag: S.string().optional().describe("Filter to entries containing this tag"),
-    stale: S.boolean().optional().describe(
-      "true = only entries the last complete index no longer found; false = exclude them"),
   },
   async execute(args, ctx) {
     const store = load(storePath(ctx as any))
@@ -318,13 +309,10 @@ export const list = tool({
     if (args.type) entries = entries.filter((e) => e.type === args.type)
     if (args.status) entries = entries.filter((e) => e.status === args.status)
     if (args.tag) entries = entries.filter((e) => (e.tags || []).includes(args.tag!))
-    if (args.stale !== undefined) entries = entries.filter((e) => !!(e.meta as any)?.stale === args.stale)
     entries.sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt))
     return JSON.stringify({
       cursor: store.cursor,
-      coverage: store.coverage,
       count: entries.length,
-      staleCount: store.entries.filter((e) => (e.meta as any)?.stale).length,
       entries,
     }, null, 2)
   },
@@ -734,29 +722,19 @@ export const init = tool({
     coverage: S.object({
       jiraExpected: S.number().optional().describe(
         "How many issues the Jira search reported IN TOTAL for the project (the 'total' field), " +
-        "not how many you sent. This is what lets PAUL detect that it silently missed some."),
+        "not how many you sent. Used only to report a gap; does not affect what is stored."),
       confluenceExpected: S.number().optional().describe(
         "How many Confluence pages were IN SCOPE for this index — the documentation trees it was " +
-        "asked to read, including ones you chose to skip. Equal to the space total when the whole " +
-        "space is in scope. This is the number reconciled against the store, so passing the space " +
-        "total on a scoped run reports every out-of-scope page as a gap."),
-      confluenceTotal: S.number().optional().describe(
-        "How many pages the whole space contains, scoped or not. Context only, never reconciled: " +
-        "it is what makes a deliberately scoped run distinguishable from a truncated one."),
-      complete: S.boolean().optional().describe(
-        "True only if you paginated to the end of BOTH sources and every item is either indexed " +
-        "or listed in skipped[]. Setting this when it is not true is how duplicates get created " +
-        "later, and it is also what allows entries you did not see to be marked stale."),
+        "asked to read, including ones you chose to skip. Used only to report a gap."),
       skipped: S.array(S.object({
         externalId: S.string().describe("Page id or Jira key that was deliberately not indexed"),
         title: S.string().optional(),
         reason: S.string().describe("Why, e.g. 'template', 'space home', 'empty stub', 'archived'"),
         source: S.string().optional().describe("jira | confluence (default confluence)"),
-      })).optional().describe("Items you decided not to index, with the reason — so a later run " +
-        "can tell a deliberate skip from something nobody ever looked at."),
+      })).optional().describe("Items you decided not to index, with the reason."),
     }).optional().describe(
-      "What this index actually saw. PAUL reconciles it against what landed in the store and " +
-      "records any unexplained gap, because the no-duplicates guarantee depends on full coverage."),
+      "Optional: how much of the source this run actually read. Returned back as a report so a " +
+      "human can see a gap; not persisted and does not affect the stored entries."),
   },
   async execute(rawArgs, ctx) {
     const path = storePath(ctx as any)
@@ -824,11 +802,6 @@ export const init = tool({
     const clean = (o: Record<string, unknown>) =>
       Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined))
 
-    // Which entries this run actually touched. Identity, not timestamps: two indexes
-    // can land in the same millisecond, and then "lastSeen === now" would wrongly
-    // report an untouched entry as seen.
-    const touched = new Set<string>()
-
     const upsert = (fields: Partial<Entry> & { externalId: string; type: string; title: string }) => {
       const existing = byExt.get(fields.externalId)
       if (existing) {
@@ -843,12 +816,8 @@ export const init = tool({
         const oldSpec = existing.meta?.spec as Record<string, unknown> | undefined
         const newSpec = (fMeta as Record<string, unknown> | undefined)?.spec as Record<string, unknown> | undefined
         if (oldSpec && newSpec) mergedMeta.spec = { ...oldSpec, ...clean(newSpec) }
-        // Seeing an item again clears any stale mark from a previous index.
         mergedMeta.lastSeen = now
-        delete mergedMeta.stale
-        delete mergedMeta.staleSince
         Object.assign(existing, clean(fRest as Record<string, unknown>), { meta: mergedMeta, updatedAt: now })
-        touched.add(existing.id)
         return { action: "updated", id: existing.id }
       }
       const entry: Entry = {
@@ -869,7 +838,6 @@ export const init = tool({
       }
       store.entries.push(entry)
       byExt.set(fields.externalId, entry)
-      touched.add(entry.id)
       return { action: "added", id: entry.id }
     }
 
@@ -943,14 +911,16 @@ export const init = tool({
     if (args.cursorNote !== undefined) store.cursor.note = args.cursorNote
     if (args.cursorPhase !== undefined || args.cursorNote !== undefined) store.cursor.updatedAt = now
 
-    // ---- coverage reconciliation ----------------------------------------------
-    // Compare what the source said exists against what actually landed here. The
-    // agent asserts nothing; the numbers do the arguing.
+    // ---- coverage report --------------------------------------------------
+    // Report-only: tells the caller how much of the source this run actually
+    // read, so a human can see a gap. It does not mutate entries and is not
+    // persisted — the dedup guarantee comes entirely from the upsert-by-
+    // externalId map above, not from this.
     const cov = args.coverage as {
-      jiraExpected?: number; confluenceExpected?: number; confluenceTotal?: number; complete?: boolean
+      jiraExpected?: number; confluenceExpected?: number
       skipped?: { externalId: string; title?: string; reason: string; source?: string }[]
     } | undefined
-    const staleSources: string[] = []
+    let coverage: CoverageReport | undefined
     if (cov) {
       const skipped = cov.skipped || []
       const skippedFor = (src: string) =>
@@ -958,8 +928,7 @@ export const init = tool({
       const indexedFor = (src: string) =>
         store.entries.filter((e) => (e.meta as any)?.source === src).length
       const gaps: string[] = []
-      const coverage: Coverage = { checkedAt: now, complete: false, skipped }
-
+      coverage = { checkedAt: now, skipped }
       for (const [src, expected] of [["jira", cov.jiraExpected], ["confluence", cov.confluenceExpected]] as const) {
         if (expected === undefined) continue
         const indexed = indexedFor(src), skip = skippedFor(src)
@@ -967,33 +936,10 @@ export const init = tool({
         const missing = expected - (indexed + skip)
         if (missing > 0) {
           gaps.push(`${src}: source reports ${expected}, store has ${indexed} indexed + ${skip} skipped ` +
-            `— ${missing} unaccounted for. PAUL may create duplicates for those.`)
-        } else {
-          // Fully accounted for, so "not seen this run" now means "no longer there".
-          staleSources.push(src)
+            `— ${missing} unaccounted for.`)
         }
       }
-      // Not reconciled — an index scoped to one tree is not missing the rest of the space.
-      if (cov.confluenceTotal !== undefined) coverage.confluenceTotal = cov.confluenceTotal
       if (gaps.length) coverage.gaps = gaps
-      coverage.complete = !!cov.complete && !gaps.length
-      store.coverage = coverage
-    }
-
-    // ---- staleness -------------------------------------------------------------
-    // Only mark entries stale for a source whose coverage reconciled: if PAUL did
-    // not manage to see everything, "I did not see it" says nothing about whether
-    // it still exists, and flagging it would be a guess dressed up as a fact.
-    let markedStale = 0
-    if (store.coverage?.complete && staleSources.length) {
-      for (const e of store.entries) {
-        const src = (e.meta as any)?.source
-        if (!src || !staleSources.includes(src)) continue
-        if (touched.has(e.id)) continue
-        if ((e.meta as any)?.stale) continue
-        e.meta = { ...(e.meta || {}), stale: true, staleSince: now }
-        markedStale++
-      }
     }
 
     save(path, store)
@@ -1004,8 +950,7 @@ export const init = tool({
       ...(mergeErrors.length ? { mergeErrors } : {}),
       totalEntries: store.entries.length,
       cursor: store.cursor,
-      coverage: store.coverage,
-      markedStale,
+      ...(coverage ? { coverage } : {}),
       scrubbed,
     }, null, 2)
   },
@@ -1041,38 +986,6 @@ function renderPageBody(store: Store, roster: Roster): string {
   html += `<p><strong>Last updated:</strong> ${esc(now)}</p>`
   html += `<h2>Roadmap cursor</h2><p><strong>Phase:</strong> ${esc(store.cursor.phase)}<br/>${esc(store.cursor.note)}</p>`
 
-  // Coverage belongs at the top: a reader has to know whether this page describes
-  // the whole project or only the part PAUL managed to read.
-  const cv = store.coverage
-  if (cv) {
-    const part = (label: string, c?: { expected?: number; indexed: number; skipped: number }) =>
-      c ? `${label}: ${c.indexed} indexed${c.skipped ? `, ${c.skipped} skipped` : ""}${c.expected !== undefined ? ` of ${c.expected}` : ""}` : ""
-    // Say so when the index covered a chosen part of the space rather than all of it,
-    // or a reader takes "42 of 42" for the whole space and it was one tree of twelve.
-    const scoped = cv.confluenceTotal !== undefined && cv.confluence?.expected !== undefined
-      && cv.confluenceTotal > cv.confluence.expected
-    const parts = [
-      part("Jira", cv.jira),
-      part("Confluence", cv.confluence) + (scoped ? ` (scoped; space has ${cv.confluenceTotal})` : ""),
-    ].filter(Boolean)
-    // Escape each part, then join with the raw entity — escaping the joined string
-    // would publish a literal "&amp;middot;".
-    html += `<h2>Coverage</h2><p><strong>Last indexed:</strong> ${esc(cv.checkedAt)}<br/>` +
-      `${parts.map(esc).join(" &middot; ")}</p>`
-    if (cv.gaps?.length) {
-      html += `<p><strong>Incomplete — this page is not the whole project:</strong></p><ul>`
-      for (const g of cv.gaps) html += `<li>${esc(g)}</li>`
-      html += `</ul>`
-    } else if (cv.complete) {
-      html += `<p><em>Every item in both sources is either indexed or listed as deliberately skipped.</em></p>`
-    }
-    if (cv.skipped?.length) {
-      html += `<p><strong>Skipped on purpose (${cv.skipped.length}):</strong></p><ul>`
-      for (const s of cv.skipped) html += `<li>${esc(s.title || s.externalId)} — ${esc(s.reason)}</li>`
-      html += `</ul>`
-    }
-  }
-
   html += `<h2>Tickets (${tix.length})</h2>`
   for (const st of order) {
     const list = byStatus[st]
@@ -1084,9 +997,7 @@ function renderPageBody(store: Store, roster: Roster): string {
       // mirror shows at a glance which ones nobody could pick up and solve.
       const gaps = validateSpec(((e.meta as any)?.spec as TicketSpec) || {})
       const flag = gaps.length ? ` <em>— needs detail (${esc(gaps.join(", "))})</em>` : ""
-      // Stale = a complete index no longer found it in the source. Probably deleted.
-      const stale = (e.meta as any)?.stale ? ` <em>— gone from the source since ${esc(String((e.meta as any).staleSince || "").slice(0, 10))}</em>` : ""
-      html += `<li>${ext ? `<strong>${esc(ext)}</strong> — ` : ""}${esc(e.title)}${stale}${flag}</li>`
+      html += `<li>${ext ? `<strong>${esc(ext)}</strong> — ` : ""}${esc(e.title)}${flag}</li>`
     }
     html += `</ul>`
   }

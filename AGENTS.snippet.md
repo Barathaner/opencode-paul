@@ -117,12 +117,10 @@ deciding, and someone already chose what became a ticket.
    - `tickets[]` — Jira issues, with `order` and (when known) `complexity` (Low|Medium|High),
      `priority` (Low|Medium|High|Critical) and `timeEstimate` (e.g. 2h, 1d). Lower `order` =
      higher on the board. Pass spec fields through only where the issue actually states them.
-   - `coverage` — `{ jiraExpected, confluenceExpected, complete, skipped[] }`. Pass the TOTALS the
-     searches reported, not what you sent, and list everything you chose not to index with a reason.
-     PAUL subtracts indexed + skipped from expected and records the remainder as a visible gap.
-     Only set `complete: true` if you really paginated to the end of both sources — the dedupe
-     guarantee, and therefore "do not create a duplicate ticket", depends on it. Once coverage is
-     complete, entries the index no longer found are marked stale rather than deleted.
+   - `coverage` (optional, report-only) — `{ jiraExpected, confluenceExpected, skipped[] }`. Pass
+     the TOTALS the searches reported, not what you sent, and list everything you chose not to
+     index with a reason. This does not affect what gets stored — dedup by `externalId` is
+     unconditional — it only lets the returned report name a gap so a human can go look.
    Every item's `externalId` is the dedup key, so re-running updates in place. Use
    `reset: true` only for a clean full re-index.
 
@@ -156,7 +154,7 @@ PUSH AFTER — whenever you change local memory (paul_add/update/remove/cursor/i
 
 ## How to use it
 1. At the start of PAUL work, call `paul_list` and `paul_cursor` (no args) to load current state.
-   Check the `coverage` it returns: if the last index reported gaps, this list is NOT the whole
+   If a prior `paul_init` reported coverage gaps in its result, this list is NOT the whole
    project, so absence from it does not prove something does not exist. Say so rather than
    concluding a ticket is new.
 2. Order tickets on the board using each entry's `order` field (lower = higher priority).

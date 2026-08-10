@@ -86,7 +86,7 @@ PAUL_PROFILE=siteb ./setup.sh
 
 | Tool | Purpose |
 |------|---------|
-| `paul_list` | Read entries (roadmap/epic/ticket/milestone/blocker), sorted by `order`; filter by type/status/tag/stale. Returns the roadmap cursor and the last index's coverage. |
+| `paul_list` | Read entries (roadmap/epic/ticket/milestone/blocker), sorted by `order`; filter by type/status/tag. Returns the roadmap cursor. |
 | `paul_add` | Create an entry (type, title, status, order, tags, freeform `meta`). |
 | `paul_update` | Change an entry by id — move status, re-order the board, merge `meta`. |
 | `paul_remove` | Delete an entry by id. |
@@ -278,9 +278,8 @@ string frozen at setup time. Roots narrow the Confluence side: setup lists the s
 pages, you pick the trees, and the walk stays inside them. `--board` / `--root` override a
 selection for one run; `--no-board` / `--no-root` ignore it and take everything.
 
-Scoping is also what makes the completeness claim mean anything. "I read the whole space" cannot be
-verified on a large space; "I read these trees, all of them" can — so `complete: true` stays both
-achievable and honest.
+Scoping is also what keeps the coverage report meaningful. "I read the whole space" cannot be
+verified on a large space; "I read these trees, all of them" can.
 
 **How deeply each page is read depends on what it is.** Meeting notes are events and their value
 decays: with a 30-day half-life (`PAUL_MEETING_HALFLIFE_DAYS`), anything past two months gets a
@@ -320,12 +319,14 @@ not turn action items found in old documents into tickets. The guarantee is prom
 API-level — details, plus the version-based skip that makes re-runs cheap, in
 [docs/INIT_FROM_DOCS.md](./docs/INIT_FROM_DOCS.md).
 
-**It reconciles its own coverage.** PAUL's promise — never create a ticket that already exists — is
-only as good as what it actually read, so each index compares the totals the sources report against
-what landed in the store, and records anything unaccounted for as a visible gap on the mirror
-instead of quietly believing it saw everything. Pages deliberately skipped are listed with a reason.
-Once coverage reconciles, items that have disappeared from the source are marked stale rather than
-deleted (`paul_list stale:true`).
+**Never creates a duplicate ticket.** Every doc/meeting/ticket is upserted by its externalId
+(Confluence page id or Jira key), so re-running the same index updates entries in place instead of
+duplicating them — that guarantee needs nothing beyond the upsert itself.
+
+**It reports what it actually saw.** Each index can optionally pass the totals the sources report
+(`jiraExpected`, `confluenceExpected`) plus what it deliberately skipped; `paul_init` echoes back
+any unaccounted-for gap in its result so a human can go look. This is a report only — it never
+mutates stored entries, and passing nothing is fine too.
 
 ## The meeting pipeline (`process_meetings.sh`)
 

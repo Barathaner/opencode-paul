@@ -90,31 +90,34 @@ it — but if you need a hard guarantee, run against a read-only Atlassian API t
 report also states which writes happened, so a violation is visible in the log at
 `$PAUL_LOG_DIR/init_from_docs.log`.
 
-## Coverage: knowing what it did *not* see
+## Never creates a duplicate ticket
 
-PAUL's core promise is that it will not create a ticket that already exists, and it checks that
-against what it has indexed. So an issue it never read looks new — and gets duplicated weeks later.
-That failure is silent by nature, which is why each index now reconciles itself:
+Every entry is deduped by `externalId` (Confluence page id, Jira key), so re-running the same
+index updates entries in place instead of creating a second copy. This is unconditional: it comes
+from a plain upsert-by-`externalId` map in `paul_init`, not from anything the agent has to get
+right about coverage or completeness.
+
+## Coverage report: knowing what it did *not* see
+
+Reading is never guaranteed complete — restricted permissions, a huge space, an interrupted run.
+`paul_init` accepts an optional `coverage` argument so a run can say so instead of staying silent
+about it:
 
 - The agent passes the **totals the sources reported** (`coverage.jiraExpected`,
   `coverage.confluenceExpected`) plus every item it deliberately skipped, with a reason.
   `confluenceExpected` counts the pages **in scope** — the documentation trees this run was asked
   to read — not the whole space, or a run scoped to one tree would report the rest of the space as
-  missing and the gap signal would mean nothing. The space total rides along as
-  `coverage.confluenceTotal`, context only, never reconciled, so a deliberately scoped index stays
-  distinguishable from a truncated one. With no root configured the two are the same number.
-- `paul_init` computes `expected − (indexed + skipped)` and records anything left over as a **gap**.
-- Gaps appear at the top of the `AGENTSMEMORY` page under **Coverage**, and come back from
-  `paul_list`, so the next session knows the list it is reading is not the whole project.
-- `complete: true` only survives if the numbers agree. An agent that claims full coverage while a
-  gap exists is overruled by the arithmetic.
+  missing and the gap signal would mean nothing.
+- `paul_init` computes `expected − (indexed + skipped)` and, if positive, returns it as a **gap** in
+  its result — a report only. It does not touch stored entries and is not persisted; the next
+  `paul_list` does not carry it.
+- A declared gap is fine. This is diagnostic output for whoever ran the index, not a promise PAUL
+  enforces on your behalf.
 
 ```bash
-jq '.coverage' "$PAUL_PROJECT_DIR/.paul/memory.json"
+# see the last init's own report, not something read back out of memory.json
+./scripts/init_from_docs.sh  # coverage gaps, if any, print in its own output
 ```
-
-A declared gap is fine — restricted permissions, a huge space, an interrupted run. A silent one is
-what causes duplicate tickets.
 
 **Where `jiraExpected` comes from.** Newer Jira Cloud returns `total: -1` from the search API rather
 than a real count, so an agent counting its own pages is the only number it has — and if it pages
@@ -128,19 +131,6 @@ own enumeration.
 reported `jira: source reports 342, store has 126 indexed + 2 skipped — 214 unaccounted for` was
 reading the board's *saved filter* — on a Kanban board, every ticket the project ever had — while
 the board itself showed ~130. The sub-filter fixes that at the source (see "Board scope" below).
-Where a gap is genuine — restricted permissions, an interrupted run — it stays declared rather than
-papered over.
-
-## Stale entries
-
-Once coverage reconciles for a source, "PAUL did not see it this run" means "it is no longer there".
-Those entries are marked `meta.stale` with a `staleSince` date rather than deleted — a ticket that
-vanished from Jira may have been moved, and its summary is still project history. The mirror shows
-them as *"gone from the source since …"*, and `paul_list stale:true` lists them. Seeing an item
-again clears the mark automatically.
-
-Nothing is ever marked stale while coverage is incomplete: not having seen something says nothing
-about whether it exists when you know you did not read everything.
 
 ## Re-running is the normal case
 
