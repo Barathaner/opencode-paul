@@ -723,6 +723,14 @@ export const init = tool({
       "Jira tickets to store as roadmap/board entries. Pass the standard ticket-format fields " +
       "(context/goal/approach/acceptanceCriteria/... — see paul_ticket_body) so the structured spec " +
       "is stored in meta.spec and the body can be re-rendered identically later."),
+    mergePaths: S.array(S.string()).optional().describe(
+      "Paths to JSON files whose contents are merged into this call, each holding one object " +
+      "with any of docs[]/meetings[]/tickets[]/skipped[] in the same shape as the inline " +
+      "arguments. This is how a fan-out returns its work: a subagent WRITES its entries to a " +
+      "file and reports only the path, because a few dozen summaries do not survive a model " +
+      "reply intact — they come back truncated, and truncated JSON cannot be parsed or retried " +
+      "into existence. Files are deduped by externalId exactly like inline entries. An " +
+      "unreadable file is reported in mergeErrors and skipped; the other files still land."),
     coverage: S.object({
       jiraExpected: S.number().optional().describe(
         "How many issues the Jira search reported IN TOTAL for the project (the 'total' field), " +
@@ -755,6 +763,47 @@ export const init = tool({
     const store = load(path)
     const roster = loadRoster(rosterPath(ctx as any))
     const scrubbed: string[] = []
+
+    // Results produced elsewhere come in as FILES, never inline. Summaries are bulk
+    // data: routed through a model's reply they get truncated, and truncated JSON is
+    // unparseable, which turns one oversized branch into a retry loop. Same reason
+    // paul_export_page hands back a bodyPath instead of the body.
+    //
+    // The files are merged here rather than by the caller, so the text never re-enters
+    // a context after it was written — and so this stays the single writer of the store,
+    // which has no locking: two concurrent savers would silently erase each other.
+    const mergeErrors: { path: string; error: string }[] = []
+    const merged: { path: string; docs: number; meetings: number; tickets: number }[] = []
+    const mergePaths: string[] = Array.isArray((rawArgs as any).mergePaths)
+      ? (rawArgs as any).mergePaths : []
+    for (const p of mergePaths) {
+      try {
+        const part = JSON.parse(readFileSync(p, "utf8"))
+        if (!part || typeof part !== "object" || Array.isArray(part)) {
+          throw new Error("file must hold a JSON object with docs/meetings/tickets arrays")
+        }
+        for (const k of ["docs", "meetings", "tickets", "skipped"] as const) {
+          const from = (part as any)[k]
+          if (!Array.isArray(from)) continue
+          if (k === "skipped") {
+            const cov = ((rawArgs as any).coverage ||= {})
+            cov.skipped = [...(cov.skipped || []), ...from]
+          } else {
+            ;(rawArgs as any)[k] = [...((rawArgs as any)[k] || []), ...from]
+          }
+        }
+        merged.push({
+          path: p,
+          docs: (part as any).docs?.length || 0,
+          meetings: (part as any).meetings?.length || 0,
+          tickets: (part as any).tickets?.length || 0,
+        })
+      } catch (e) {
+        // One unreadable branch must not discard the branches that worked.
+        mergeErrors.push({ path: p, error: (e as Error).message })
+      }
+    }
+
     // Everything imported passes through the roles scrub before it is stored.
     const args = scrubDeep(rawArgs, roster, scrubbed)
     const now = new Date().toISOString()
@@ -951,6 +1000,8 @@ export const init = tool({
     return JSON.stringify({
       reset: !!args.reset,
       imported: result,
+      ...(merged.length ? { merged } : {}),
+      ...(mergeErrors.length ? { mergeErrors } : {}),
       totalEntries: store.entries.length,
       cursor: store.cursor,
       coverage: store.coverage,

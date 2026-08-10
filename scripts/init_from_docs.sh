@@ -203,6 +203,10 @@ fi
 if ! grep -qsF ".paul/roster.local.json" "$PROJECT_DIR/.gitignore"; then
   echo ".paul/roster.local.json" >> "$PROJECT_DIR/.gitignore"
 fi
+# Branch results handed from a subagent to paul_init via mergePaths. Scratch, not memory.
+if ! grep -qsF ".paul/init-*.json" "$PROJECT_DIR/.gitignore"; then
+  echo ".paul/init-*.json" >> "$PROJECT_DIR/.gitignore"
+fi
 
 log() {
   local MESSAGE="[$(date +'%Y-%m-%d %H:%M:%S')] $1"

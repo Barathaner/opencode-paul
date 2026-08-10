@@ -9,7 +9,7 @@
  *
  * Exit code 0 = all pass, 1 = a failure.
  */
-import { rmSync, readFileSync, existsSync, accessSync, constants } from "node:fs"
+import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, accessSync, constants } from "node:fs"
 import * as P from "../tool/paul.ts"
 import { PaulPlugin } from "../src/index.ts"
 
@@ -562,6 +562,43 @@ ok(storageCalls.length === 1 && /CDATA/.test(prompt),
 ok(/SPLIT THE WORK ACROSS SUBAGENTS/.test(prompt) && /EXACTLY ONE branch/.test(prompt)
    && /read-only contract restated in full/.test(prompt),
   "init_from_docs prompt fans out per tree, assigns each page once, and rebinds the contract")
+
+// A branch's summaries are bulk data. Routed through a model's reply they come back
+// truncated, truncated JSON will not parse, and asking again cannot reconstitute it —
+// which is how one oversized branch turned into a retry loop.
+ok(/THE SUBAGENT WRITES ITS RESULT TO A FILE/.test(prompt)
+   && /Never ask it to return the entries in its reply/.test(prompt)
+   && /mergePaths/.test(prompt),
+  "init_from_docs: subagents hand back a file path, never the entries themselves")
+ok(/ONE RETRY, NOT A LOOP/.test(prompt) && /subagent result unreadable/.test(prompt)
+   && /Never ask a third time/.test(prompt),
+  "init_from_docs: an unreadable subagent reply is retried once, then declared as a gap")
+
+// The store has no locking — load() reads the whole file and save() rewrites it — so
+// paul_init merging the files is also what keeps a parallel fan-out single-writer.
+const DIR11 = "/tmp/opencode-paul-verify11"
+rmSync(DIR11, { recursive: true, force: true })
+const ctx11 = { worktree: DIR11, directory: DIR11 }
+mkdirSync(DIR11, { recursive: true })
+const fA = DIR11 + "/a.json", fB = DIR11 + "/b.json", fBad = DIR11 + "/bad.json"
+writeFileSync(fA, JSON.stringify({
+  docs: [{ externalId: "P1", title: "Arch", summary: "s" }, { externalId: "P2", title: "Ops", summary: "s" }],
+  skipped: [{ externalId: "P9", reason: "template", source: "confluence" }] }))
+writeFileSync(fB, JSON.stringify({ tickets: [{ externalId: "KAN-1", title: "T1" }] }))
+writeFileSync(fBad, "{ not json")
+const mg = J(await P.init.execute({
+  docs: [{ externalId: "P1", title: "same page, inline", summary: "s" }],
+  mergePaths: [fA, fB, fBad, DIR11 + "/missing.json"],
+  coverage: { confluenceExpected: 3, complete: true },
+}, ctx11))
+const mgIds = J(await P.list.execute({}, ctx11)).entries.map((e) => e.meta.externalId).sort()
+ok(mgIds.join(",") === "KAN-1,P1,P2",
+  "paul_init mergePaths: files are merged and deduped by externalId against inline entries")
+ok(mg.mergeErrors?.length === 2 && mg.merged?.length === 2,
+  "paul_init mergePaths: an unreadable or missing file is reported, the good ones still land")
+ok(mg.coverage.confluence.skipped === 1 && mg.coverage.complete === true,
+  "paul_init mergePaths: each file's skipped[] counts toward coverage")
+rmSync(DIR11, { recursive: true, force: true })
 
 // confluenceExpected is the number that gets reconciled. Defining it twice — once as
 // the space total, once as the in-scope count — made every scoped run report the rest

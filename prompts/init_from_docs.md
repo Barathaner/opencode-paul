@@ -108,9 +108,22 @@ SPLIT THE WORK ACROSS SUBAGENTS, ONE PER TREE:
 - Each subagent inherits nothing from this prompt, so give it: its branch's page list, the depth
   rules below, the classification rules, and PHASE 0's read-only contract restated in full. It is
   bound by that contract exactly as you are.
-- Require it to return STRUCTURED data, not prose: the doc/meeting entries, one rollup summary for
-  the branch, its skipped[] with reasons, and its counts. You merge those, reconcile coverage and
-  make the single paul_init call in PHASE 4. Raw page bodies never come back to you.
+- THE SUBAGENT WRITES ITS RESULT TO A FILE. Never ask it to return the entries in its reply. Give
+  it a path — `.paul/init-<branch-id>.json`, beside memory.json — and tell it to write one JSON
+  object there: { docs: [...], meetings: [...], skipped: [...] }, same field shapes paul_init
+  takes, plus one rollup summary for the branch as a doc entry.
+- Its REPLY is four values and nothing else: { path, docs: <n>, meetings: <n>, skipped: <n> }.
+  A few dozen summaries do not survive a model reply intact — they come back truncated, truncated
+  JSON cannot be parsed, and no amount of asking again reconstitutes it. Four values cannot
+  truncate into something ambiguous.
+- You collect the paths and pass them to ONE paul_init call as mergePaths in PHASE 4. Do not open
+  those files. Do not summarize them. Do not copy their contents into your own reply. The tool
+  reads them, dedupes by externalId across branches, and folds each file's skipped[] into coverage.
+- IF A SUBAGENT'S REPLY IS UNREADABLE, YOU GET ONE RETRY, NOT A LOOP. Re-run that branch once,
+  saying explicitly: write the file, reply with the path only. If the second attempt also fails,
+  put the branch in skipped[] with reason "subagent result unreadable" and move on to the next
+  branch. Never ask a third time, and never try to repair a truncated payload by hand — a declared
+  gap is a result, an infinite loop is not.
 - Keep a lid on concurrency — every subagent hits the same Atlassian rate limit, and a run that
   gets throttled halfway is worse than one that took longer.
 - If the harness has no subagents available, do the same work inline, branch by branch, and say so
@@ -184,6 +197,11 @@ that quietly mixes the document with your own knowledge is worse than a short on
 session cannot tell which half to trust. If a page is thin, its summary is thin.
 
 Call paul_init ONCE with:
+  * mergePaths: ["<every .paul/init-*.json a subagent reported>"] — the branch results. Pass the
+    paths, not the contents: paul_init reads the files, dedupes them against each other and against
+    anything you pass inline, and folds each file's skipped[] into coverage. Entries you produced
+    yourself (a branch you handled inline, the Jira tickets) still go in the arrays below; the two
+    sources merge.
   * docs:     [{ externalId: "<Confluence page id>", title: "<page title>",
                  summary: "<your summary>", docType: "spec|decision|reference|onboarding|process",
                  version: <Confluence page version number>, url: "<page url>",
