@@ -431,8 +431,25 @@ ok(SWITCHES.every((v) => setup.includes(`ask_toggle ${v}`) || setup.includes(`as
   "setup.sh asks about all three behaviour switches")
 ok(SWITCHES.every((v) => new RegExp(`export ${v}=`).test(setup)),
   "setup.sh writes all three switches into paul.env")
-ok(/\[ -f "\$SECRETS" \] && \. "\$SECRETS"/.test(setup) && /EDIT THESE HERE/.test(setup),
-  "setup.sh re-reads paul.env first, so a hand-edited answer survives a re-run, and says so")
+ok(/STORED_%s/.test(setup) && !/^\[ -f "\$SECRETS" \] && \. "\$SECRETS"$/m.test(setup) && /EDIT THESE HERE/.test(setup),
+  "setup.sh reads paul.env into STORED_* instead of sourcing it over the live variables")
+
+// Sourcing paul.env directly made a stored value look like an environment preset, which
+// silently swallowed the API-token prompt on every re-run. Each credential prompt must
+// take its stored value as a DEFAULT — and the stored names differ from the asked names,
+// which is the mismatch that left URL/email/project/space being re-asked from scratch.
+ok([
+  ['JIRA_URL', 'STORED_PAUL_JIRA_URL'],
+  ['JIRA_EMAIL', 'STORED_PAUL_JIRA_EMAIL'],
+  ['ATLASSIAN_API_TOKEN', 'STORED_ATLASSIAN_API_TOKEN'],
+  ['JIRA_PROJECT', 'STORED_PAUL_JIRA_PROJECT'],
+  ['CONFLUENCE_SPACE', 'STORED_PAUL_CONFLUENCE_SPACE'],
+].every(([asked, stored]) => {
+  const call = setup.match(new RegExp(`ask\\w*\\s+${asked}\\s[\\s\\S]{0,220}`))
+  return !!call && call[0].includes(stored)
+}), "setup.sh offers every stored credential as the prompt default (no silently skipped token)")
+ok(/ask_secret\(\) \{ # ask_secret VAR "prompt" \[stored\]/.test(setup) && /Enter to keep/.test(setup),
+  "setup.sh: ask_secret prompts with the stored token rather than skipping the question")
 
 // The loader must not be gated on the token: a shell that already had one used to
 // run without the behaviour switches, which is exactly when they matter.

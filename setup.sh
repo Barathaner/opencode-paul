@@ -110,11 +110,25 @@ ok "installed tools/paul.ts (11 paul_* tools)"
 # --- 3. collect Atlassian credentials ---------------------------------------
 hdr "3/7  Atlassian connection"
 
-# Load whatever a previous setup wrote. Every ask* helper skips a variable that is
-# already set, so answers — including ones edited into paul.env by hand — survive
-# re-running this script. Without it, "just change it in paul.env" would be untrue:
-# the file is rewritten wholesale further down.
-[ -f "$SECRETS" ] && . "$SECRETS"
+# Load whatever a previous setup wrote, so answers — including ones edited into
+# paul.env by hand — survive re-running this script. The file is rewritten wholesale
+# further down, so without this "just change it in paul.env" would be untrue.
+#
+# Read into STORED_* rather than sourcing into the live variables, because a stored
+# value and one preset in the environment must behave differently: an environment
+# preset skips its prompt (the NONINTERACTIVE contract), while a stored value is
+# only a DEFAULT you can accept with Enter or type over. Sourcing directly made the
+# two indistinguishable, which is what silently swallowed the API-token prompt.
+# It also maps the stored PAUL_* names onto the names the prompts use.
+if [ -f "$SECRETS" ]; then
+  eval "$( . "$SECRETS" >/dev/null 2>&1
+           for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
+                    PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
+                    PAUL_PROTECTED_TERMS; do
+             printf 'STORED_%s=%q\n' "$v" "${!v-}"
+           done )"
+  ok "found existing settings in $SECRETS — press Enter at any prompt to keep them"
+fi
 echo "${DIM}PAUL syncs meetings→Confluence and action items→Jira. Get an API token at:${RST}"
 echo "${DIM}  https://id.atlassian.com/manage-profile/security/api-tokens${RST}"
 
@@ -143,12 +157,18 @@ ask() { # ask VAR "prompt" "default"  (skips if VAR already set in env)
   printf "   %s%s: " "$prompt" "$d"; read -r reply
   eval "$var=\"\${reply:-$def}\""
 }
-ask_secret() {
-  local var="$1" prompt="$2" cur="${!1:-}" reply
+ask_secret() { # ask_secret VAR "prompt" [stored]  — Enter keeps the stored secret
+  local var="$1" prompt="$2" stored="${3:-}" cur="${!1:-}" reply
+  # Set in the environment = an explicit preset; that still skips the prompt.
   if [ -n "$cur" ]; then eval "$var=\$cur"; return; fi
-  if [ "$NONINTERACTIVE" = "1" ]; then return; fi
+  if [ "$NONINTERACTIVE" = "1" ]; then eval "$var=\$stored"; return; fi
+  local hint=""
+  # Show only the last four characters: enough to recognise which token is stored,
+  # without printing a credential to the terminal.
+  [ -n "$stored" ] && hint=" ${DIM}[stored …${stored: -4} — Enter to keep]${RST}"
   drain_stdin
-  printf "   %s: " "$prompt"; read -rs reply; echo; eval "$var=\"$reply\""
+  printf "   %s%s: " "$prompt" "$hint"; read -rs reply; echo
+  eval "$var=\"\${reply:-\$stored}\""
 }
 ask_toggle() { # ask_toggle VAR "prompt" "default 0|1"  -> stores 0 or 1
   local var="$1" prompt="$2" def="${3:-0}" cur="${!1:-}" reply
@@ -185,19 +205,31 @@ ask_key() { # ask_key VAR "prompt" "default" "regex" "what it is" [upper]
   eval "$var=\$v"
 }
 
-ask        JIRA_URL          "Atlassian base URL (e.g. https://you.atlassian.net)"
-ask        JIRA_EMAIL        "Atlassian account email"
-ask_secret ATLASSIAN_API_TOKEN "Atlassian API token (hidden)"
-ask_key    JIRA_PROJECT      "Jira project key" "KAN" '^[A-Z][A-Z0-9_]{1,9}$' "Jira project key" upper
+ask        JIRA_URL          "Atlassian base URL (e.g. https://you.atlassian.net)" \
+                             "${STORED_PAUL_JIRA_URL:-}"
+ask        JIRA_EMAIL        "Atlassian account email" "${STORED_PAUL_JIRA_EMAIL:-}"
+ask_secret ATLASSIAN_API_TOKEN "Atlassian API token (hidden)" "${STORED_ATLASSIAN_API_TOKEN:-}"
+ask_key    JIRA_PROJECT      "Jira project key" "${STORED_PAUL_JIRA_PROJECT:-KAN}" \
+                             '^[A-Z][A-Z0-9_]{1,9}$' "Jira project key" upper
 # Personal Confluence spaces are "~" plus a lowercase account id, so this one is
 # deliberately not upper-cased.
-ask_key    CONFLUENCE_SPACE  "Confluence space key" "SOFTWAREEN" '^~?[A-Za-z0-9_]{1,60}$' "Confluence space key"
+ask_key    CONFLUENCE_SPACE  "Confluence space key" "${STORED_PAUL_CONFLUENCE_SPACE:-SOFTWAREEN}" \
+                             '^~?[A-Za-z0-9_]{1,60}$' "Confluence space key"
 
 JIRA_URL="${JIRA_URL%/}"
 CONFLUENCE_URL="$JIRA_URL/wiki"
 
-[ -n "${JIRA_URL:-}" ] && [ -n "${JIRA_EMAIL:-}" ] && [ -n "${ATLASSIAN_API_TOKEN:-}" ] \
-  || die "JIRA_URL, JIRA_EMAIL and ATLASSIAN_API_TOKEN are required."
+if [ -z "${JIRA_URL:-}" ] || [ -z "${JIRA_EMAIL:-}" ] || [ -z "${ATLASSIAN_API_TOKEN:-}" ]; then
+  MISSING=""
+  [ -z "${JIRA_URL:-}" ]            && MISSING="$MISSING JIRA_URL"
+  [ -z "${JIRA_EMAIL:-}" ]          && MISSING="$MISSING JIRA_EMAIL"
+  [ -z "${ATLASSIAN_API_TOKEN:-}" ] && MISSING="$MISSING ATLASSIAN_API_TOKEN"
+  if [ -f "$SECRETS" ]; then
+    warn "$SECRETS exists but does not supply:$MISSING"
+    die "Set$MISSING in the environment, or add them to $SECRETS, and re-run."
+  fi
+  die "Required and not provided:$MISSING"
+fi
 
 # --- 4. validate credentials + the project and space actually exist ----------
 hdr "4/7  Validating connection"
@@ -263,17 +295,17 @@ echo "${DIM}Both default to no. You can change any answer later in $SECRETS.${RS
 echo "${DIM}   Existing tickets: PAUL always creates NEW tickets for new action items. This is"
 echo "   about tickets that already exist — their description was written by a person.${RST}"
 ask_toggle PAUL_REWRITE_DESCRIPTIONS \
-  "Let PAUL rewrite the description of an existing Jira ticket?" 0
+  "Let PAUL rewrite the description of an existing Jira ticket?" "${STORED_PAUL_REWRITE_DESCRIPTIONS:-0}"
 
 echo "${DIM}   Board order: PAUL ranks tickets by its own priority order. Answering no still"
 echo "   prints the order it would apply, so you can look before letting it act.${RST}"
 ask_toggle PAUL_REORDER_APPLY \
-  "Let PAUL re-rank the $JIRA_PROJECT board to match that order?" 0
+  "Let PAUL re-rank the $JIRA_PROJECT board to match that order?" "${STORED_PAUL_REORDER_APPLY:-0}"
 
 echo "${DIM}   Names become roles, so a first name that is also a product name gets rewritten:"
 echo "   with a 'Paul' on the team, 'Paul memory' would become 'Full-stack Developer memory'."
 echo "   List product/vendor names to protect (comma-separated), or leave empty.${RST}"
-ask PAUL_PROTECTED_TERMS "Protected terms" ""
+ask PAUL_PROTECTED_TERMS "Protected terms" "${STORED_PAUL_PROTECTED_TERMS:-}"
 
 # --- 6. write config + secrets ----------------------------------------------
 hdr "6/7  Writing OpenCode config"
