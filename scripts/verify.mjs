@@ -495,7 +495,7 @@ ok(!/space = SOFTWAREEN|project = KAN/.test(snippet)
    && snippet.includes("{{CONFLUENCE_SPACE}}") && snippet.includes("{{JIRA_JQL}}"),
   "AGENTS.snippet.md takes the space and the search from setup instead of hardcoding them")
 ok(!/ok "AGENTS\.md already has the PAUL block"/.test(setup)
-   && /paul-project-memory:end/.test(setup) && setup.includes("render_agents_block"),
+   && /\$MARKER:end/.test(setup) && setup.includes("render_agents_block"),
   "setup.sh refreshes the AGENTS.md block between its markers instead of skipping it")
 ok(readFileSync(REPO + "scripts/install_command.sh", "utf8").includes("PRINT_JQL")
    && setup.includes("PRINT_JQL=1"),
@@ -510,6 +510,42 @@ ok(exportsAt > 0 && exportsAt < setup.indexOf("init_from_docs.sh\" \\"),
 // The board list prints ids next to the line numbers; both have to be accepted.
 ok(/\(\.id \| tostring\) == \$i/.test(setup.slice(setup.indexOf("parse_board_pick"))),
   "setup.sh accepts a board id as well as a line number at the board prompt")
+
+// PAUL_PROFILE: everything setup installs is a singleton under one config dir, so a
+// second install for another Atlassian site used to replace the first one silently.
+const cmdInstall = readFileSync(REPO + "scripts/install_command.sh", "utf8")
+ok(/SECRETS="\$OPENCODE_DIR\/paul\.env"/.test(setup)
+   && /MCP_KEY="mcp-atlassian"/.test(setup)
+   && /MARKER="paul-project-memory"/.test(setup)
+   && /CMD_NAME="paul-init-docs"/.test(setup),
+  "no profile keeps every path exactly where it is today (existing installs do not move)")
+ok(/paul\.\$PAUL_PROFILE\.env/.test(setup) && /paul\.\$PAUL_PROFILE\.token\.env/.test(setup)
+   && /MCP_KEY="mcp-atlassian-\$PAUL_PROFILE"/.test(setup)
+   && /MARKER="paul-project-memory:\$PAUL_PROFILE"/.test(setup)
+   && /CMD_NAME="paul-init-docs-\$PAUL_PROFILE"/.test(setup)
+   && /ATLASSIAN_API_TOKEN_\$\(/.test(setup),
+  "a profile gets its own settings file, token file+name, MCP server, markers and command")
+ok(/--arg mcp_key/.test(setup) && /\.mcp\[\$mcp_key\]/.test(setup)
+   && /--arg token_ref "\{env:\$TOKEN_VAR\}"/.test(setup),
+  "setup.sh adds a per-profile Atlassian server rather than replacing the existing one")
+ok(cmdInstall.includes("PAUL_PROFILE") && /CMD_NAME="paul-init-docs\$\{PROFILE:\+-\$PROFILE\}"/.test(cmdInstall),
+  "install_command.sh writes a per-profile command file")
+ok(snippet.includes("{{PROFILE_MARKER}}:start") && snippet.includes("{{PROFILE_MARKER}}:end")
+   && /PROFILE_MARKER\\\}\\\}/.test(setup),
+  "the AGENTS block markers carry the profile, so profiles cannot overwrite each other")
+
+// The three paul_load_env copies must stay identical — a profile handled by only two of
+// them silently sends one entrypoint to the wrong install.
+const loaders = SHIPPED_SCRIPTS.map((p) =>
+  (readFileSync(REPO + p, "utf8").match(/paul_load_env\(\) \{[\s\S]*?\n\}/) || [""])[0])
+ok(loaders.every((b) => b && b === loaders[0]),
+  "all three paul_load_env copies are identical")
+ok(loaders[0].includes("PAUL_PROFILE") && /no such profile/.test(loaders[0])
+   && /if \[ -z "\$p" \]; then/.test(loaders[0]),
+  "paul_load_env resolves the profile, fails on an unknown one, and lets its file win")
+ok(SHIPPED_SCRIPTS.every((p) =>
+  /paul-\$\{PAUL_PROFILE:-project\}/.test(readFileSync(REPO + p, "utf8"))),
+  "each profile gets its own pipeline memory dir (no shared memory.json between installs)")
 
 // The loader must not be gated on the token: a shell that already had one used to
 // run without the behaviour switches, which is exactly when they matter.

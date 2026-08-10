@@ -40,8 +40,39 @@ hdr()  { echo; echo "${BOLD}$*${RST}"; }
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 OPENCODE_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
 CONFIG="$OPENCODE_DIR/opencode.json"
-SECRETS="$OPENCODE_DIR/paul.env"
 NONINTERACTIVE="${NONINTERACTIVE:-0}"
+
+# --- profiles ----------------------------------------------------------------
+# Everything setup installs lives under one config dir, so a second run for another
+# Jira project used to replace the first install: same paul.env, same AGENTS.md block,
+# same /paul-init-docs, same mcp-atlassian server, same pipeline memory dir. A profile
+# gives an install its own copy of each, so two Atlassian sites can coexist.
+#
+# No profile = the paths PAUL has always used. Existing installs must not move.
+PAUL_PROFILE="${PAUL_PROFILE:-}"
+if [ -n "$PAUL_PROFILE" ]; then
+  [[ "$PAUL_PROFILE" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]] \
+    || die "PAUL_PROFILE must be lowercase letters, digits, '-' or '_' (got '$PAUL_PROFILE')."
+  SECRETS="$OPENCODE_DIR/paul.$PAUL_PROFILE.env"
+  # The token is the one value OpenCode itself must see, via {env:...} in opencode.json.
+  # It gets a per-profile NAME and its own file, so a shell can source several profiles'
+  # tokens without them overwriting each other. The PAUL_* settings have fixed names, so
+  # they stay out of the shell entirely and are read on demand by the scripts.
+  TOKEN_FILE="$OPENCODE_DIR/paul.$PAUL_PROFILE.token.env"
+  TOKEN_VAR="ATLASSIAN_API_TOKEN_$(printf '%s' "$PAUL_PROFILE" | tr '[:lower:]-' '[:upper:]_')"
+  MCP_KEY="mcp-atlassian-$PAUL_PROFILE"
+  MARKER="paul-project-memory:$PAUL_PROFILE"
+  CMD_NAME="paul-init-docs-$PAUL_PROFILE"
+  PROFILE_LABEL="$PAUL_PROFILE"
+else
+  SECRETS="$OPENCODE_DIR/paul.env"
+  TOKEN_FILE="$SECRETS"          # the default profile keeps everything in one file
+  TOKEN_VAR="ATLASSIAN_API_TOKEN"
+  MCP_KEY="mcp-atlassian"
+  MARKER="paul-project-memory"
+  CMD_NAME="paul-init-docs"
+  PROFILE_LABEL="default"
+fi
 
 # What THIS shell already had exported when setup started, captured before setup writes
 # its own values over them. Used at the very end to say whether the terminal you are
@@ -51,6 +82,7 @@ SHELL_CONFLUENCE_SPACE="${PAUL_CONFLUENCE_SPACE:-}"
 
 echo "${BOLD}=== PAUL setup ===${RST}"
 echo "${DIM}Config dir: $OPENCODE_DIR${RST}"
+echo "${DIM}Profile:    $PROFILE_LABEL${RST}"
 
 # --- 1. prerequisites --------------------------------------------------------
 hdr "1/7  Checking prerequisites"
@@ -134,6 +166,10 @@ hdr "3/7  Atlassian connection"
 # It also maps the stored PAUL_* names onto the names the prompts use.
 if [ -f "$SECRETS" ]; then
   eval "$( . "$SECRETS" >/dev/null 2>&1
+           # A profile keeps its token in a separate file under a per-profile name; read
+           # it back under the plain name so every prompt below stays profile-agnostic.
+           [ -f "$TOKEN_FILE" ] && . "$TOKEN_FILE" >/dev/null 2>&1
+           ATLASSIAN_API_TOKEN="${!TOKEN_VAR:-${ATLASSIAN_API_TOKEN:-}}"
            for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
                     PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
                     PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
@@ -141,6 +177,12 @@ if [ -f "$SECRETS" ]; then
              printf 'STORED_%s=%q\n' "$v" "${!v-}"
            done )"
   ok "found existing settings in $SECRETS — press Enter at any prompt to keep them"
+fi
+
+# The prompts below all speak the plain name; only the files and opencode.json use the
+# per-profile one. Seed it from the profile's variable so a preset still works.
+if [ -n "$PAUL_PROFILE" ] && [ -z "${ATLASSIAN_API_TOKEN:-}" ]; then
+  ATLASSIAN_API_TOKEN="${!TOKEN_VAR:-}"
 fi
 echo "${DIM}PAUL syncs meetings→Confluence and action items→Jira. Get an API token at:${RST}"
 echo "${DIM}  https://id.atlassian.com/manage-profile/security/api-tokens${RST}"
@@ -478,8 +520,22 @@ hdr "6/7  Writing OpenCode config"
 
 # 5a. secrets file (chmod 600) — the token never goes into opencode.json.
 umask 077
+
+# A profile's token goes into its own file under a per-profile NAME, so a shell can
+# source several profiles' tokens at once without them overwriting each other. The
+# default profile keeps everything in one file, exactly as it always has.
+if [ -n "$PAUL_PROFILE" ]; then
+  cat > "$TOKEN_FILE" <<TOK
+# PAUL token for profile "$PAUL_PROFILE" — sourced by your shell so OpenCode can resolve
+# {env:$TOKEN_VAR} in opencode.json. Keep private (chmod 600). Do NOT commit.
+export $TOKEN_VAR="$ATLASSIAN_API_TOKEN"
+TOK
+  chmod 600 "$TOKEN_FILE"
+  ok "wrote $TOKEN_FILE ${DIM}(chmod 600, exports $TOKEN_VAR)${RST}"
+fi
+
 cat > "$SECRETS" <<ENV
-# PAUL secrets — sourced by your shell so OpenCode & scripts see them.
+# PAUL settings${PAUL_PROFILE:+ for profile "$PAUL_PROFILE"} — read by every PAUL script.
 # Keep this file private (chmod 600). Do NOT commit it.
 export ATLASSIAN_API_TOKEN="$ATLASSIAN_API_TOKEN"
 export PAUL_JIRA_URL="$JIRA_URL"
@@ -523,6 +579,7 @@ ok "wrote $SECRETS ${DIM}(chmod 600)${RST}"
 # bootstrap index at the end of this script would run against the values this very run
 # just replaced.
 export ATLASSIAN_API_TOKEN
+[ -n "$PAUL_PROFILE" ] && export "$TOKEN_VAR=$ATLASSIAN_API_TOKEN" PAUL_PROFILE
 export PAUL_JIRA_URL="$JIRA_URL"
 export PAUL_JIRA_EMAIL="$JIRA_EMAIL"
 export PAUL_JIRA_PROJECT="$JIRA_PROJECT"
@@ -542,26 +599,30 @@ jq \
   --arg cf_url "$CONFLUENCE_URL" \
   --arg email "$JIRA_EMAIL" \
   --arg uvx "$UVX_BIN" \
+  --arg mcp_key "$MCP_KEY" \
+  --arg token_ref "{env:$TOKEN_VAR}" \
   '
   # 1) ensure plugin array contains the local paul plugin path + SDK-based one.
   .plugin = ((.plugin // []) + ["opencode-paul"] | unique) |
-  # 2) ensure mcp-atlassian server block (env token via {env:...}, never inline).
+  # 2) ensure this profiles Atlassian server block (env token via {env:...}, never
+  #    inline). Keyed per profile, so a second site adds a server instead of
+  #    replacing the first ones.
   .mcp = (.mcp // {}) |
-  .mcp["mcp-atlassian"] = {
+  .mcp[$mcp_key] = {
     "enabled": true,
     "type": "local",
     "command": [$uvx, "mcp-atlassian"],
     "environment": {
       "JIRA_URL": $jira_url,
       "JIRA_USERNAME": $email,
-      "JIRA_API_TOKEN": "{env:ATLASSIAN_API_TOKEN}",
+      "JIRA_API_TOKEN": $token_ref,
       "CONFLUENCE_URL": $cf_url,
       "CONFLUENCE_USERNAME": $email,
-      "CONFLUENCE_API_TOKEN": "{env:ATLASSIAN_API_TOKEN}"
+      "CONFLUENCE_API_TOKEN": $token_ref
     }
   }
   ' "$CONFIG" > "$TMP" && mv "$TMP" "$CONFIG"
-ok "updated $CONFIG (plugin + mcp-atlassian)"
+ok "updated $CONFIG (plugin + $MCP_KEY)"
 
 # NOTE: "opencode-paul" in the plugin array resolves from npm once published.
 # Until then the drop-in tools/paul.ts (installed in step 2) provides the tools,
@@ -581,56 +642,65 @@ AGENTS_JQL="$(PRINT_JQL=1 PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS" \
 [ -n "$AGENTS_JQL" ] || AGENTS_JQL="project = \"$JIRA_PROJECT\" ORDER BY created DESC"
 
 render_agents_block() {
-  awk -v space="$CONFLUENCE_SPACE" -v project="$JIRA_PROJECT" -v jql="${AGENTS_JQL//&/\\&}" '
+  awk -v space="$CONFLUENCE_SPACE" -v project="$JIRA_PROJECT" -v jql="${AGENTS_JQL//&/\\&}" \
+      -v marker="$MARKER" '
     {
       gsub(/\{\{CONFLUENCE_SPACE\}\}/, space)
       gsub(/\{\{JIRA_PROJECT\}\}/, project)
       gsub(/\{\{JIRA_JQL\}\}/, jql)
+      gsub(/\{\{PROFILE_MARKER\}\}/, marker)
       print
     }
   ' "$REPO_DIR/AGENTS.snippet.md"
 }
 
-# Both markers, or the replace would eat the rest of someone's AGENTS.md.
-if [ -f "$AGENTS" ] && grep -q "paul-project-memory:start" "$AGENTS" \
-   && grep -q "paul-project-memory:end" "$AGENTS"; then
+# Both markers, or the replace would eat the rest of someone's AGENTS.md. The marker
+# carries the profile, so another profile's block is never matched or replaced.
+if [ -f "$AGENTS" ] && grep -q "$MARKER:start" "$AGENTS" \
+   && grep -q "$MARKER:end" "$AGENTS"; then
   BLOCK="$AGENTS.block.$$"; TMP_A="$AGENTS.tmp.$$"
   render_agents_block > "$BLOCK"
   # Everything outside the two markers is the user's own file and is copied verbatim.
-  awk -v blockfile="$BLOCK" '
-    /<!-- paul-project-memory:start -->/ && !skip {
+  awk -v blockfile="$BLOCK" -v marker="$MARKER" '
+    index($0, "<!-- " marker ":start -->") && !skip {
       skip = 1
       while ((getline line < blockfile) > 0) print line
       close(blockfile)
       next
     }
-    skip && /<!-- paul-project-memory:end -->/ { skip = 0; next }
+    skip && index($0, "<!-- " marker ":end -->") { skip = 0; next }
     !skip { print }
   ' "$AGENTS" > "$TMP_A" && mv "$TMP_A" "$AGENTS"
   rm -f "$BLOCK" "$TMP_A"
-  ok "refreshed the PAUL block in $AGENTS ${DIM}(space $CONFLUENCE_SPACE, project $JIRA_PROJECT)${RST}"
+  ok "refreshed the $PROFILE_LABEL PAUL block in $AGENTS ${DIM}(space $CONFLUENCE_SPACE, project $JIRA_PROJECT)${RST}"
 else
   { [ -f "$AGENTS" ] && echo; render_agents_block; } >> "$AGENTS"
-  ok "appended PAUL block to $AGENTS"
+  ok "appended the $PROFILE_LABEL PAUL block to $AGENTS"
 fi
 
 # 5c-2. install the /paul-init-docs command (bootstrap memory from existing docs).
 if [ -x "$REPO_DIR/scripts/install_command.sh" ]; then
   if PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS" PAUL_JIRA_BOARD_NAMES="$JIRA_BOARD_NAMES" \
+       PAUL_PROFILE="$PAUL_PROFILE" \
        "$REPO_DIR/scripts/install_command.sh" "$CONFLUENCE_SPACE" "$JIRA_PROJECT" >/dev/null 2>&1; then
-    ok "installed /paul-init-docs command ${DIM}(space $CONFLUENCE_SPACE, project $JIRA_PROJECT${JIRA_BOARD_NAMES:+, boards $JIRA_BOARD_NAMES})${RST}"
+    ok "installed /$CMD_NAME command ${DIM}(space $CONFLUENCE_SPACE, project $JIRA_PROJECT${JIRA_BOARD_NAMES:+, boards $JIRA_BOARD_NAMES})${RST}"
   else
-    warn "could not install the /paul-init-docs command (run scripts/install_command.sh by hand)"
+    warn "could not install the /$CMD_NAME command (run scripts/install_command.sh by hand)"
   fi
 fi
 
-# 5d. make sure the secrets file gets sourced by the user's shell.
+# 5d. make sure the shell exports the token, so OpenCode can resolve {env:...}.
+#
+# A profile sources only its TOKEN file: the settings file exports fixed PAUL_* names,
+# and sourcing two profiles' settings would leave the shell on whichever came last.
+# Token variable names are per-profile, so several of those lines coexist safely.
 RC=""
 [ -n "${ZSH_VERSION:-}" ] && RC="$HOME/.zshrc"
 [ -z "$RC" ] && [ -f "$HOME/.bashrc" ] && RC="$HOME/.bashrc"
-SRC_LINE="[ -f \"$SECRETS\" ] && source \"$SECRETS\"  # PAUL"
+RC_FILE="$TOKEN_FILE"
+SRC_LINE="[ -f \"$RC_FILE\" ] && source \"$RC_FILE\"  # PAUL${PAUL_PROFILE:+ ($PAUL_PROFILE)}"
 if [ -n "$RC" ]; then
-  if grep -qF "$SECRETS" "$RC" 2>/dev/null; then ok "$RC already sources PAUL secrets"
+  if grep -qF "$RC_FILE" "$RC" 2>/dev/null; then ok "$RC already sources $RC_FILE"
   else echo "$SRC_LINE" >> "$RC"; ok "added source line to $RC"; fi
 fi
 
@@ -703,32 +773,54 @@ if [ "$BOOTSTRAP" = "1" ]; then
 fi
 
 echo
-echo "${GRN}${BOLD}PAUL is set up.${RST}"
+echo "${GRN}${BOLD}PAUL is set up.${RST}${PAUL_PROFILE:+ ${DIM}(profile $PAUL_PROFILE)${RST}}"
 echo
 echo "${BOLD}Next steps${RST}"
+# Every command below has to name the profile, or it runs the default install.
+RUN_PREFIX="${PAUL_PROFILE:+PAUL_PROFILE=$PAUL_PROFILE }"
 if [ "$BOOTSTRAP" = "1" ]; then
   echo "  1. Memory is indexed. Refresh it any time (unchanged pages are skipped):"
 else
   echo "  1. Teach PAUL the project you already have (read-only, safe to repeat):"
 fi
-echo "       ${CYN}$REPO_DIR/scripts/init_from_docs.sh${RST}   ${DIM}or /paul-init-docs in a session${RST}"
+echo "       ${CYN}${RUN_PREFIX}$REPO_DIR/scripts/init_from_docs.sh${RST}   ${DIM}or /$CMD_NAME in a session${RST}"
 echo "  2. Try the meeting pipeline on the sample transcript:"
-echo "       ${CYN}$REPO_DIR/process_meetings.sh $REPO_DIR/examples/sample-transcript.json${RST}"
+echo "       ${CYN}${RUN_PREFIX}$REPO_DIR/process_meetings.sh $REPO_DIR/examples/sample-transcript.json${RST}"
 echo "  3. Or just open OpenCode in any project and ask it to use the paul_* tools."
 
 # A shell started before this run still exports the OLD paul.env (the rc line below puts
-# it there), and every script lets the environment win over the file — so in THIS terminal
-# the scripts above would silently use the settings that were just replaced.
-if { [ -n "$SHELL_JIRA_PROJECT" ] && [ "$SHELL_JIRA_PROJECT" != "$JIRA_PROJECT" ]; } \
-   || { [ -n "$SHELL_CONFLUENCE_SPACE" ] && [ "$SHELL_CONFLUENCE_SPACE" != "$CONFLUENCE_SPACE" ]; }; then
+# it there), and without a profile the scripts let the environment win over the file — so
+# in THIS terminal they would silently use the settings that were just replaced.
+if [ -z "$PAUL_PROFILE" ] \
+   && { { [ -n "$SHELL_JIRA_PROJECT" ] && [ "$SHELL_JIRA_PROJECT" != "$JIRA_PROJECT" ]; } \
+     || { [ -n "$SHELL_CONFLUENCE_SPACE" ] && [ "$SHELL_CONFLUENCE_SPACE" != "$CONFLUENCE_SPACE" ]; }; }; then
   echo
   echo "${YLW}  This terminal still exports the previous settings"
   echo "  (${SHELL_JIRA_PROJECT:-—} / ${SHELL_CONFLUENCE_SPACE:-—}). Before running any of the above here:${RST}"
   echo "       ${CYN}source $SECRETS${RST}   ${DIM}or open a new terminal${RST}"
 fi
+
+# Other installs on this machine, so it is obvious which one was just written.
+OTHER_PROFILES=""
+for f in "$OPENCODE_DIR"/paul.*.env; do
+  [ -f "$f" ] || continue
+  case "$f" in *.token.env) continue ;; esac
+  n="${f##*/paul.}"; n="${n%.env}"
+  [ "$n" = "$PAUL_PROFILE" ] && continue
+  OTHER_PROFILES="${OTHER_PROFILES:+$OTHER_PROFILES, }$n"
+done
+[ -n "$PAUL_PROFILE" ] && [ -f "$OPENCODE_DIR/paul.env" ] \
+  && OTHER_PROFILES="${OTHER_PROFILES:+$OTHER_PROFILES, }default"
 echo
-echo "${DIM}The scripts read $SECRETS themselves — no 'source' needed in a NEW shell.${RST}"
-echo "${DIM}           A value already exported in your current shell still wins over it.${RST}"
+if [ -n "$PAUL_PROFILE" ]; then
+  echo "${DIM}Profile:   $PAUL_PROFILE — prefix every PAUL command with ${RST}${CYN}PAUL_PROFILE=$PAUL_PROFILE${RST}"
+  echo "${DIM}           Token var: $TOKEN_VAR   MCP server: $MCP_KEY   Command: /$CMD_NAME${RST}"
+  echo "${DIM}           Under a profile the settings file wins over your shell — edit it there.${RST}"
+else
+  echo "${DIM}The scripts read $SECRETS themselves — no 'source' needed in a NEW shell.${RST}"
+  echo "${DIM}           A value already exported in your current shell still wins over it.${RST}"
+fi
+[ -n "$OTHER_PROFILES" ] && echo "${DIM}Other PAUL installs here: $OTHER_PROFILES${RST}"
 echo "${DIM}Behaviour: edit $SECRETS to change what PAUL may rewrite or re-rank —${RST}"
 echo "${DIM}           re-running setup.sh keeps whatever you set there.${RST}"
 echo "${DIM}Secrets:   $SECRETS (chmod 600, git-ignored)${RST}"

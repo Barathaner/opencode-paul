@@ -205,9 +205,10 @@ tools `paul_list`, `paul_add`, … automatically.
 left alone. It documents the workflow — pull state at the start of PAUL work, keep statuses
 truthful, the standard ticket format, and the Jira/Confluence init + sync recipes.
 
-The snippet carries `{{CONFLUENCE_SPACE}}` and `{{JIRA_JQL}}` placeholders that setup fills in
-with your space and your board-scoped search, so the agent is told the same keys the scripts
-use. If you append it by hand instead, substitute those two yourself — otherwise the agent
+The snippet carries `{{CONFLUENCE_SPACE}}`, `{{JIRA_JQL}}` and `{{PROFILE_MARKER}}` placeholders
+that setup fills in with your space, your board-scoped search and the profile's marker name, so
+the agent is told the same keys the scripts use and two profiles' blocks never overwrite each
+other. If you append it by hand instead, substitute all three yourself — otherwise the agent
 searches for the literal placeholder.
 
 ## Atlassian sync (optional)
@@ -375,6 +376,49 @@ standalone) needs Jira REST credentials — reuse your Atlassian ones:
 
 Requires the `mcp-atlassian` MCP server wired up (see below) and a working `opencode`
 model endpoint. Trigger it from a file watcher / cron / Teams webhook per new transcript.
+
+## More than one PAUL (`PAUL_PROFILE`)
+
+Everything setup installs lives under one config dir, so without a profile a second
+`setup.sh` run replaces the first install. A profile gives an install its own copy of each
+piece, so two Jira projects — or two Atlassian sites, with different tokens — coexist:
+
+```bash
+                       ./setup.sh     # the default install, unchanged
+PAUL_PROFILE=siteb     ./setup.sh     # a second, fully independent one
+```
+
+| | no profile | `PAUL_PROFILE=siteb` |
+|---|---|---|
+| settings | `paul.env` | `paul.siteb.env` |
+| token file + variable | same file, `ATLASSIAN_API_TOKEN` | `paul.siteb.token.env`, `ATLASSIAN_API_TOKEN_SITEB` |
+| MCP server in `opencode.json` | `mcp-atlassian` | `mcp-atlassian-siteb` |
+| `AGENTS.md` block markers | `paul-project-memory:*` | `paul-project-memory:siteb:*` |
+| slash command | `/paul-init-docs` | `/paul-init-docs-siteb` |
+| pipeline memory | `~/opencode_automations/paul-project` | `~/opencode_automations/paul-siteb` |
+| in-repo store | `<repo>/.paul/memory.json` — per repo either way | |
+
+Then name the profile on every command:
+
+```bash
+PAUL_PROFILE=siteb ./scripts/init_from_docs.sh
+PAUL_PROFILE=siteb ./scripts/reorder_board.sh
+```
+
+Two rules worth knowing:
+
+- **The token variable is per profile on purpose.** Your shell rc sources each profile's
+  token file, and the names differ, so several can be exported at once — that is what lets
+  one OpenCode config hold two Atlassian servers.
+- **Under a profile, the settings file wins over your shell.** Without a profile the old
+  contract holds (an exported value beats the file, so a one-off override works). With a
+  profile that would let one install's `PAUL_JIRA_PROJECT` bleed into another's run, so the
+  profile's file wins — change settings by editing `paul.<profile>.env`. Variables that are
+  never stored in it (`PAUL_PROJECT_DIR`, `PAUL_LOG_DIR`, `PAUL_REORDER_STATUSES`, `DRY_RUN`)
+  still work as command-line overrides in both modes.
+
+An unknown or malformed profile is a hard error — the scripts never quietly fall back to the
+default install.
 
 ## The store
 

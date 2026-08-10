@@ -135,6 +135,7 @@ The script reads the same environment as `process_meetings.sh`, all of it writte
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `PAUL_PROFILE` | *(empty)* | which install to use — see "More than one PAUL" in the README |
 | `PAUL_CONFLUENCE_SPACE` | `SOFTWAREEN` | space to read |
 | `PAUL_JIRA_PROJECT` | `KAN` | project to read |
 | `PAUL_JIRA_BOARDS` | *(empty)* | board ids to read instead of the whole project (asked at setup) |

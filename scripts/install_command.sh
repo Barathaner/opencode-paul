@@ -46,8 +46,17 @@ SCOPE="${SCOPE//&/\\&}"
 # clause is a second place for it to drift. PRINT_JQL=1 hands it over instead.
 if [ "${PRINT_JQL:-0}" = "1" ]; then printf '%s\n' "$JQL"; exit 0; fi
 
+# A profile installs its own command, so two PAULs give you /paul-init-docs-a and
+# /paul-init-docs-b instead of one overwriting the other. No profile = the old name.
+PROFILE="${PAUL_PROFILE:-}"
+if [ -n "$PROFILE" ] && ! [[ "$PROFILE" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
+  echo "ERROR: PAUL_PROFILE must be lowercase letters, digits, '-' or '_' (got '$PROFILE')" >&2
+  exit 2
+fi
+CMD_NAME="paul-init-docs${PROFILE:+-$PROFILE}"
+
 DEST_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/command"
-DEST="$DEST_DIR/paul-init-docs.md"
+DEST="$DEST_DIR/$CMD_NAME.md"
 
 [ -f "$PROMPT_TEMPLATE" ] || { echo "ERROR: $PROMPT_TEMPLATE not found" >&2; exit 1; }
 
@@ -59,7 +68,7 @@ MODE_LINE="  * Do NOT pass reset unless the user asked for a full re-index. Entr
 {
   cat <<FRONTMATTER
 ---
-description: Learn this project from its existing Confluence docs and Jira issues, read-only, into PAUL memory
+description: Learn ${PROFILE:-this project} from its existing Confluence docs and Jira issues, read-only, into PAUL memory
 ---
 
 Defaults for this run: Confluence space "$SPACE", Jira project "$PROJECT"$SCOPE,
@@ -85,4 +94,4 @@ FRONTMATTER
 } > "$DEST"
 
 echo "Installed OpenCode command -> $DEST"
-echo "Run it inside a session with:  /paul-init-docs"
+echo "Run it inside a session with:  /$CMD_NAME"

@@ -57,20 +57,42 @@ PROMPT_TEMPLATE="$REPO_DIR/prompts/init_from_docs.md"
 # when they mattered. Values already in the environment still win, so an explicit
 # override on the command line is never clobbered.
 paul_load_env() {
-  local f="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/paul.env" v
-  [ -f "$f" ] || return 0
+  local dir="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}" p="${PAUL_PROFILE:-}" f v
+  # A profile has its own settings file, so two PAULs (two Jira projects, or two
+  # Atlassian sites) do not overwrite each other. No profile = the original path.
+  if [ -n "$p" ]; then
+    if [[ ! "$p" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
+      echo "[paul] ERROR: PAUL_PROFILE '$p' must be lowercase letters, digits, '-' or '_'." >&2
+      return 1
+    fi
+    f="$dir/paul.$p.env"
+    if [ ! -f "$f" ]; then
+      echo "[paul] ERROR: no such profile '$p' ($f). Run: PAUL_PROFILE=$p ./setup.sh" >&2
+      return 1
+    fi
+  else
+    f="$dir/paul.env"
+    [ -f "$f" ] || return 0
+  fi
+  # Without a profile the environment wins over the file, so a command-line override is
+  # never clobbered. WITH a profile the file wins: the shell rc sources other profiles'
+  # tokens and possibly the default profile's settings, and those fixed PAUL_* names
+  # would otherwise bleed one install's project key into another's run.
   local keep=""
-  for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
-           PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
-           PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
-           PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
-    [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
-  done
+  if [ -z "$p" ]; then
+    for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
+             PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
+             PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
+             PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES; do
+      [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
+    done
+  fi
   . "$f"
   [ -n "$keep" ] && eval "export $keep"
+  export PAUL_PROFILE="$p"
   return 0
 }
-paul_load_env
+paul_load_env || exit 1
 
 # --- CONFIGURATION (env-overridable; defaults are the production values) ---
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin/opencode}"
@@ -78,7 +100,7 @@ export PATH="$(dirname "$OPENCODE_BIN"):$HOME/.local/bin:$PATH"
 
 AUTOMATION_DIR="${PAUL_AUTOMATION_DIR:-$HOME/opencode_automations}"
 LOG_DIR="${PAUL_LOG_DIR:-$AUTOMATION_DIR/logs}"
-PROJECT_DIR="${PAUL_PROJECT_DIR:-$AUTOMATION_DIR/paul-project}"
+PROJECT_DIR="${PAUL_PROJECT_DIR:-$AUTOMATION_DIR/paul-${PAUL_PROFILE:-project}}"
 CONFLUENCE_SPACE="${PAUL_CONFLUENCE_SPACE:-SOFTWAREEN}"
 JIRA_PROJECT="${PAUL_JIRA_PROJECT:-KAN}"
 AGENTSMEMORY_TITLE="${PAUL_AGENTSMEMORY_TITLE:-AGENTSMEMORY}"

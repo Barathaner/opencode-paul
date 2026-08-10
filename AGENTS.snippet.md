@@ -1,4 +1,4 @@
-<!-- paul-project-memory:start -->
+<!-- {{PROFILE_MARKER}}:start -->
 # PAUL — Project Memory (structured, per-project)
 
 For project-management / roadmap work (PAUL: ordering tickets on Kanban boards,
@@ -158,4 +158,4 @@ PUSH AFTER — whenever you change local memory (paul_add/update/remove/cursor/i
    Never a person's name — see "People are roles, never names" above.
 
 Keep the store authoritative and current — it is how the next session knows the roadmap position.
-<!-- paul-project-memory:end -->
+<!-- {{PROFILE_MARKER}}:end -->
