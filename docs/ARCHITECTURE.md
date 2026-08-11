@@ -1,17 +1,12 @@
 # Architecture
 
-> **Note:** The driver scripts described below (`.sh`) have been ported to TypeScript.
-> The entrypoints are now `paul-meetings`, `paul-init-docs`, and `paul-reorder` (npm bins
-> in `src/cli/`). The diagrams show the original design with bash labels and remain
-> accurate for understanding the data flow — the TS ports follow the same protocol.
-
 ## Problem / solution fit
 
 **Problem.** An agent given project-management work — ordering tickets on a Kanban board,
 tracking meeting decisions, turning a transcript into Jira tasks — has no memory between runs
 unless something gives it one. Left to prose notes or ad-hoc tool calls, that state drifts and
 contradicts itself across sessions, and nothing is shared between runs or teammates. Concretely,
-per `process_meetings.sh`'s own header comment:
+per `paul-meetings`'s own header comment:
 
 > PAUL is the memory layer: without it, each run was blind and re-created the same Jira tickets
 > every time.
@@ -33,8 +28,8 @@ reads and writes through defined verbs (`paul_list`, `paul_add`, `paul_update`, 
 instead of free-form prose. Concretely:
 
 - **Two entrypoints turn existing or new project knowledge into that memory.**
-  `scripts/init_from_docs.sh` bootstraps it, read-only, from a Confluence space and Jira project
-  that already exist. `process_meetings.sh` turns a new meeting transcript into Confluence notes
+  `paul-init-docs` bootstraps it, read-only, from a Confluence space and Jira project
+  that already exist. `paul-meetings` turns a new meeting transcript into Confluence notes
   plus deduped Jira tickets. Both write through the same store, so state accumulates run over run
   instead of resetting.
 - **The guarantees that matter live in code, not in a prompt** — a rule stated only in a prompt
@@ -67,9 +62,9 @@ flowchart LR
     end
 
     subgraph Drivers["Driver scripts"]
-        PM["process_meetings.sh"]
-        ID["scripts/init_from_docs.sh"]
-        RB["scripts/reorder_board.sh"]
+        PM["paul-meetings"]
+        ID["paul-init-docs"]
+        RB["paul-reorder"]
     end
 
     OC["OpenCode agent loop\n(opencode run --auto)"]
@@ -127,9 +122,9 @@ flowchart LR
     style RANK stroke:#c33,stroke-width:1px
 ```
 
-Read-only vs. write is the load-bearing distinction here: `scripts/init_from_docs.sh` (outlined
+Read-only vs. write is the load-bearing distinction here: `paul-init-docs` (outlined
 green) never reaches the red write targets — it reads Confluence and Jira, writes only
-`.paul/memory.json` and the `AGENTSMEMORY` mirror. `process_meetings.sh` is the one path that
+`.paul/memory.json` and the `AGENTSMEMORY` mirror. `paul-meetings` is the one path that
 creates Jira issues, a Confluence notes page, and (optionally) re-ranks the board.
 
 ### Implementation modules
@@ -150,19 +145,19 @@ all in one language (TypeScript):
 The shared `src/types.ts` is the cross-layer contract — where the old TS/bash split
 caused copy-paste drift, the single language now makes the type system the source of truth.
 
-## Sequence diagram — `process_meetings.sh`
+## Sequence diagram — `paul-meetings`
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User as Cron / User
-    participant Script as process_meetings.sh
+    participant Script as paul-meetings
     participant Agent as OpenCode agent
     participant PAUL as PAUL tools
     participant Conf as Confluence
     participant Jira as Jira
 
-    User->>Script: ./process_meetings.sh transcript.json
+    User->>Script: paul-meetings transcript.json
     Script->>Script: load paul.env, resolve MCP server for profile
     Script->>Script: sha256 dedup check against processed_files.csv
     Script->>Script: parse transcript with jq
@@ -208,10 +203,10 @@ sequenceDiagram
     Script->>Script: record file hash in processed_files.csv
 
     Note over Script: PHASE 5 — board reorder (separate script)
-    Script->>Script: scripts/reorder_board.sh
+    Script->>Script: paul-reorder
     Script->>Script: for each board: log type (kanban/scrum/simple) + configured columns
     alt AI mode possible (board scoped + opencode reachable + PAUL_REORDER_AI!=0)
-        Script->>Script: disable every other Atlassian MCP server for this call\n(same overlay as process_meetings.sh/init_from_docs.sh)
+        Script->>Script: disable every other Atlassian MCP server for this call\n(same overlay as paul-meetings/paul-init-docs)
         Script->>Agent: opencode run --auto "<prompts/reorder_board.md, per board>"\n(bounded by PAUL_REORDER_AI_TIMEOUT, default 600s)
         Note over Agent,PAUL: agent pulls fresh AGENTSMEMORY memory, reads the board's\nACTUAL columns, decides mapping + ranking with judgment
         Agent->>Script: writes .paul/reorder_plan.<board_id>.json
@@ -231,19 +226,19 @@ sequenceDiagram
     end
 ```
 
-## Sequence diagram — `scripts/init_from_docs.sh`
+## Sequence diagram — `paul-init-docs`
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User as Cron / User / setup.sh
-    participant Script as init_from_docs.sh
+    participant Script as paul-init-docs
     participant Agent as OpenCode agent
     participant PAUL as PAUL tools
     participant Conf as Confluence
     participant Jira as Jira
 
-    User->>Script: ./scripts/init_from_docs.sh [--reset|--count|--dry-run|--board|--root...]
+    User->>Script: paul-init-docs [--reset|--count|--dry-run|--board|--root...]
     Script->>Script: load paul.env, resolve board/root scope
     Script->>Jira: POST /search/approximate-count (preflight, exact JQL)
     Jira-->>Script: N issues match
