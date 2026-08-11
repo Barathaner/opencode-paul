@@ -224,6 +224,11 @@ if ! paul_mcp_key_configured "$MCP_KEY"; then
   log "=================== RUN ABORTED ==================="
   exit 4
 fi
+if ! paul_mcp_env_check "$MCP_KEY"; then
+  log "ERROR: MCP server '$MCP_KEY' references env vars that are not set — cannot connect."
+  log "=================== RUN ABORTED ==================="
+  exit 4
+fi
 MCP_DISABLED="$(paul_mcp_disabled_names "$MCP_KEY")"
 MCP_OVERLAY="$(paul_mcp_overlay "$MCP_KEY")"
 log "Atlassian server: $MCP_KEY${MCP_DISABLED:+ (disabled for this run: $MCP_DISABLED)}"
@@ -249,11 +254,17 @@ PHASE 0 — LOAD MEMORY (pull first, before doing anything else):
   stored, use confluence_search with cql: title = "$AGENTSMEMORY_TITLE" AND space = "$CONFLUENCE_SPACE".
 - If the AGENTSMEMORY page exists: confluence_get_page(page_id=<id>, convert_to_markdown: false)
   — storage format, deliberately: the machine state is a CDATA block that markdown conversion
-  would mangle. Then
+  would mangle. Pass ONLY page_id and convert_to_markdown — never fields/expand/other args
+  (mcp-atlassian's get_page accepts neither and will reject the call). Then
   paul_import_page(pageBody=<body>, pageId=<id>, spaceKey="$CONFLUENCE_SPACE") to merge remote -> local.
-- Call paul_list and paul_cursor (no args) to load existing meetings, tickets, and
+- Call paul_list(brief: true) and paul_cursor (no args) to load existing meetings, tickets, and
   the current roadmap phase. You will use this to AVOID creating duplicate Jira
-  tasks for action items that already exist.
+  tasks for action items that already exist. brief mode omits meta.spec/details
+  to keep context bounded on large stores — you still get titles, externalIds,
+  statuses, tags, and meta.priority/complexity/timeEstimate for dedup.
+  Never use grep (ripgrep) on .paul/memory.json or tool-output files — the
+  store carries large single-line JSON that exceeds the grep tool's 64KB
+  record limit. Always use paul_list for anything you need from memory.
 
 PHASE 0.5 — PEOPLE ARE ROLES, NEVER NAMES (do this before writing ANYTHING):
 - Call paul_roles (no args) to read the role vocabulary and anyone already registered.
@@ -402,36 +413,41 @@ if [ $OPENCODE_EXIT_CODE -eq 0 ]; then
   log "PAUL memory updated; .paul/memory.json in $PROJECT_DIR and AGENTSMEMORY page are in sync."
 
   # --- PHASE 5: reorder the Jira board to match PAUL memory ---
-  # mcp-atlassian has no rank tool, so we rank via the Agile REST API here.
-  # Touches the todo (open / "Zu erledigen") and backlog columns by default; also
-  # in_progress if PAUL_REORDER_INCLUDE_IN_PROGRESS=1. review / blocked / done are
-  # never touched.
-  # PREVIEW unless PAUL_REORDER_APPLY=1: the column order is usually something the
-  # team agreed, and re-ranking it should be a decision, not a side effect.
-  REORDER_SCRIPT="$(cd "$(dirname "$0")" && pwd)/scripts/reorder_board.sh"
-  if [ -x "$REORDER_SCRIPT" ]; then
-    REORDER_SCOPE_DESC="todo + backlog columns"
-    [ "${PAUL_REORDER_INCLUDE_IN_PROGRESS:-0}" = "1" ] && REORDER_SCOPE_DESC="$REORDER_SCOPE_DESC + in_progress"
-    if [ "${PAUL_REORDER_APPLY:-0}" = "1" ]; then
-      log "Reordering Jira board from PAUL memory ($REORDER_SCOPE_DESC)..."
-    else
-      log "Previewing board order from PAUL memory (set PAUL_REORDER_APPLY=1 to apply)..."
-    fi
-    PAUL_PROJECT_DIR="$PROJECT_DIR" \
-    PAUL_JIRA_URL="${PAUL_JIRA_URL:-${JIRA_URL:-}}" \
-    PAUL_JIRA_EMAIL="${PAUL_JIRA_EMAIL:-${JIRA_USERNAME:-}}" \
-    ATLASSIAN_API_TOKEN="${ATLASSIAN_API_TOKEN:-}" \
-    PAUL_REORDER_APPLY="${PAUL_REORDER_APPLY:-0}" \
-    PAUL_REORDER_STATUSES="${PAUL_REORDER_STATUSES:-}" \
-    PAUL_REORDER_INCLUDE_IN_PROGRESS="${PAUL_REORDER_INCLUDE_IN_PROGRESS:-0}" \
-    PAUL_JIRA_BOARDS="${PAUL_JIRA_BOARDS:-}" \
-    PAUL_JIRA_BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}" \
-    PAUL_JIRA_RANK_FIELD="${PAUL_JIRA_RANK_FIELD:-}" \
-      "$REORDER_SCRIPT" 2>&1 | tee -a "$LOG_FILE"
-    RC=${PIPESTATUS[0]}
-    [ "$RC" -eq 0 ] && log "Board reorder finished." || log "WARN: board reorder exited $RC (memory is still correct; check Jira creds/rank field)."
+  # Only when the operator authorised it. PAUL_REORDER_APPLY is the gate: setup asks
+  # "Let PAUL re-rank the board?" and a "no" stores 0. Answering no means the reorder
+  # does not run AT ALL — not even as a preview — because the AI decision pipeline
+  # (pulling the whole AGENTSMEMORY page + all tickets through OpenCode) is the
+  # expensive part, and running it for a preview you did not ask for is waste.
+  # Tickets are still created either way — that is the main job of this script,
+  # and it happens before this step.
+  #   PAUL_REORDER_APPLY=0 → skip entirely (setup's default answer: "no").
+  #   PAUL_REORDER_APPLY=1 → run the reorder (AI or JQ mode as configured).
+  # Standalone scripts/reorder_board.sh still previews by default when run
+  # directly — the gate is on this script's invocation of it.
+  if [ "${PAUL_REORDER_APPLY:-0}" != "1" ]; then
+    log "PAUL_REORDER_APPLY != 1 — board reorder skipped (setup asked; answer 'yes' to let PAUL re-rank, or run scripts/reorder_board.sh standalone for a preview)."
   else
-    log "WARN: reorder_board.sh not found/executable at $REORDER_SCRIPT — skipping board reorder."
+    REORDER_SCRIPT="$(cd "$(dirname "$0")" && pwd)/scripts/reorder_board.sh"
+    if [ -x "$REORDER_SCRIPT" ]; then
+      REORDER_SCOPE_DESC="todo + backlog columns"
+      [ "${PAUL_REORDER_INCLUDE_IN_PROGRESS:-0}" = "1" ] && REORDER_SCOPE_DESC="$REORDER_SCOPE_DESC + in_progress"
+      log "Reordering Jira board from PAUL memory ($REORDER_SCOPE_DESC)..."
+      PAUL_PROJECT_DIR="$PROJECT_DIR" \
+      PAUL_JIRA_URL="${PAUL_JIRA_URL:-${JIRA_URL:-}}" \
+      PAUL_JIRA_EMAIL="${PAUL_JIRA_EMAIL:-${JIRA_USERNAME:-}}" \
+      ATLASSIAN_API_TOKEN="${ATLASSIAN_API_TOKEN:-}" \
+      PAUL_REORDER_APPLY="${PAUL_REORDER_APPLY:-0}" \
+      PAUL_REORDER_STATUSES="${PAUL_REORDER_STATUSES:-}" \
+      PAUL_REORDER_INCLUDE_IN_PROGRESS="${PAUL_REORDER_INCLUDE_IN_PROGRESS:-0}" \
+      PAUL_JIRA_BOARDS="${PAUL_JIRA_BOARDS:-}" \
+      PAUL_JIRA_BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}" \
+      PAUL_JIRA_RANK_FIELD="${PAUL_JIRA_RANK_FIELD:-}" \
+        "$REORDER_SCRIPT" 2>&1 | tee -a "$LOG_FILE"
+      RC=${PIPESTATUS[0]}
+      [ "$RC" -eq 0 ] && log "Board reorder finished." || log "WARN: board reorder exited $RC (memory is still correct; check Jira creds/rank field)."
+    else
+      log "WARN: reorder_board.sh not found/executable at $REORDER_SCRIPT — skipping board reorder."
+    fi
   fi
 else
   log "ERROR: OpenCode execution failed with exit code $OPENCODE_EXIT_CODE."

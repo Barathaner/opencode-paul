@@ -454,6 +454,11 @@ if ! paul_mcp_key_configured "$MCP_KEY"; then
   log "=================== RUN ABORTED ==================="
   exit 4
 fi
+if ! paul_mcp_env_check "$MCP_KEY"; then
+  log "ERROR: MCP server '$MCP_KEY' references env vars that are not set — cannot connect."
+  log "=================== RUN ABORTED ==================="
+  exit 4
+fi
 MCP_DISABLED="$(paul_mcp_disabled_names "$MCP_KEY")"
 MCP_OVERLAY="$(paul_mcp_overlay "$MCP_KEY")"
 log "Atlassian server: $MCP_KEY${MCP_DISABLED:+ (disabled for this run: $MCP_DISABLED)}"

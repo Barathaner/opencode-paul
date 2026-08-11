@@ -390,7 +390,7 @@ MCP_OVERLAY=""
 if ai_mode_possible; then
   . "$REPO_DIR/scripts/lib/mcp_scope.sh"
   MCP_KEY="$(paul_mcp_key)"
-  if paul_mcp_key_configured "$MCP_KEY"; then
+  if paul_mcp_key_configured "$MCP_KEY" && paul_mcp_env_check "$MCP_KEY"; then
     AI_MODE=1
     # Disable every OTHER Atlassian server for the duration of the AI-mode calls, same
     # as process_meetings.sh/init_from_docs.sh — without this, a machine with two sites

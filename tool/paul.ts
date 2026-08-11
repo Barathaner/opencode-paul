@@ -128,11 +128,28 @@ function emptyStore(): Store {
   }
 }
 
+// Entries can arrive without createdAt/updatedAt (e.g. a remote AGENTSMEMORY
+// page written by an older PAUL, or an entry a teammate hand-edited in
+// Confluence). paul_list sorts on createdAt, so a missing one crashes the
+// whole tool. Backfill the timestamps on every load/import so no code path
+// can hold a timestamp-less entry.
+function normalizeEntry(e: Entry, now: string): Entry {
+  return {
+    ...e,
+    createdAt: e.createdAt || now,
+    updatedAt: e.updatedAt || now,
+  }
+}
+
 function load(path: string): Store {
   if (!existsSync(path)) return emptyStore()
   try {
     const raw = JSON.parse(readFileSync(path, "utf8"))
-    return { ...emptyStore(), ...raw }
+    const now = new Date().toISOString()
+    const entries = Array.isArray(raw.entries)
+      ? raw.entries.map((e: Entry) => normalizeEntry(e, now))
+      : []
+    return { ...emptyStore(), ...raw, entries }
   } catch (e) {
     throw new Error(`PAUL store at ${path} is corrupt: ${(e as Error).message}`)
   }
@@ -317,6 +334,7 @@ export const list = tool({
     type: S.string().optional().describe("Filter by entry type, e.g. ticket, epic, milestone, blocker"),
     status: S.string().optional().describe("Filter by status, e.g. todo, in_progress, blocked, done"),
     tag: S.string().optional().describe("Filter to entries containing this tag"),
+    brief: S.boolean().optional().describe("Omit details and meta.spec from each entry to save context on large stores (keep id/type/title/status/order/tags/meta.externalId)."),
   },
   async execute(args, ctx) {
     const store = load(storePath(ctx as any))
@@ -324,11 +342,20 @@ export const list = tool({
     if (args.type) entries = entries.filter((e) => e.type === args.type)
     if (args.status) entries = entries.filter((e) => e.status === args.status)
     if (args.tag) entries = entries.filter((e) => (e.tags || []).includes(args.tag!))
-    entries.sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt))
+    entries.sort((a, b) => a.order - b.order || (a.createdAt || "").localeCompare(b.createdAt || ""))
+    let result = entries
+    if (args.brief) {
+      result = entries.map((e) => {
+        const { details, meta, ...rest } = e
+        let slimMeta = meta ? { ...meta } : undefined
+        if (slimMeta) { const { spec, ...mrest } = slimMeta as Record<string, unknown>; slimMeta = mrest as typeof meta }
+        return { ...rest, ...(slimMeta ? { meta: slimMeta } : {}) }
+      })
+    }
     return JSON.stringify({
       cursor: store.cursor,
-      count: entries.length,
-      entries,
+      count: result.length,
+      entries: result,
     }, null, 2)
   },
 })
@@ -1277,15 +1304,17 @@ export const import_page = tool({
     for (const e of store.entries) local.set(keyOf(e), e)
 
     let added = 0, updated = 0, unchanged = 0
+    const now = new Date().toISOString()
     for (const re of remoteData.entries) {
+      const nre = normalizeEntry(re as Entry, now)
       const k = keyOf(re)
       const cur = local.get(k)
       if (!cur) {
-        store.entries.push(re)
-        local.set(k, re)
+        store.entries.push(nre)
+        local.set(k, nre)
         added++
-      } else if ((re.updatedAt || "") > (cur.updatedAt || "")) {
-        Object.assign(cur, re)
+      } else if ((nre.updatedAt || "") > (cur.updatedAt || "")) {
+        Object.assign(cur, nre)
         updated++
       } else {
         unchanged++

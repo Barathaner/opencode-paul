@@ -84,12 +84,41 @@ paul_mcp_disabled_names() {
       | map(.key) | join(", ")' "$cfg" 2>/dev/null
 }
 
-# Is the server this run needs actually configured? Anything else means the run would
-# start with no Atlassian tools at all, which is worth saying before it does.
+# Is the server this run needs actually configured AND enabled? A server present
+# but disabled in opencode.json will never start, and the run would proceed blind.
 paul_mcp_key_configured() {
   local keep="$1" cfg
   cfg="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/opencode.json"
   command -v jq >/dev/null 2>&1 || return 0
   [ -f "$cfg" ] || return 1
-  jq -e --arg keep "$keep" '(.mcp // {}) | has($keep)' "$cfg" >/dev/null 2>&1
+  jq -e --arg keep "$keep" '(.mcp // {}) | has($keep) and ((.mcp[$keep].enabled // true) != false)' "$cfg" >/dev/null 2>&1
+}
+
+# After the configured check passes, verify every {env:VAR} reference in the
+# server's environment block resolves to a non-empty value in THIS shell.
+# Without this, a profile whose token file was never sourced starts with zero
+# Atlassian tools and the agent discovers it only after a whole run has passed.
+paul_mcp_env_check() {
+  local keep="$1" cfg
+  cfg="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/opencode.json"
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -f "$cfg" ] || return 1
+  local refs
+  refs=$(jq -r --arg k "$keep" '
+    ((.mcp // {})[$k].environment // {}) | to_entries[]
+    | select(.value | tostring | test("\\{env:[^}]+\\}"))
+    | .value' "$cfg" 2>/dev/null)
+  [ -n "$refs" ] || return 0
+  local missing=""
+  while IFS= read -r val; do
+    local name="${val#*\{env:}"
+    name="${name%\}}"
+    [ -n "${!name:-}" ] || missing="$missing $name"
+  done <<< "$refs"
+  if [ -n "$missing" ]; then
+    echo "[paul] ERROR: MCP server '$keep' references env vars that are not set:$missing" >&2
+    echo "[paul]        Source your shell rc (or the token file) and re-run." >&2
+    return 1
+  fi
+  return 0
 }

@@ -376,8 +376,9 @@ What each run does, in order:
    ticket a PAUL `order` from those attributes.
 6. **Push memory** — exports and updates the `AGENTSMEMORY` page, so the next run — or a
    teammate on another machine — starts from this meeting's state.
-7. **Preview the board order** — `scripts/reorder_board.sh` decides the order the board *would*
-   have if it matched PAUL's priorities. When a board is scoped (`PAUL_JIRA_BOARDS`) and OpenCode
+7. **Reorder the board** (only when authorised) — if `PAUL_REORDER_APPLY=1` (setup answer:
+   "yes"), `scripts/reorder_board.sh` decides the order the board *should* have
+   if it matched PAUL's priorities and applies it via the rank API. When a board is scoped (`PAUL_JIRA_BOARDS`) and OpenCode
    is reachable, it does this by asking the agent: pulling PAUL memory fresh from AGENTSMEMORY,
    reading the board's ACTUAL columns (never assuming a column named "Zu erledigen" or "In Review"
    matches a PAUL status by string comparison), and reasoning over priority, dependencies,
@@ -385,10 +386,11 @@ What each run does, in order:
    formula. That decision is written to a plan file; this script only applies it via the rank API.
    Without a board scope, or if AI mode is off/unavailable (`PAUL_REORDER_AI=0`, no `opencode`
    binary), it falls back to a deterministic rule: within each column, tickets whose tracked
-   dependencies aren't all `done` yet sink below the ones ready to start, tie broken by PAUL
-   `order`. **Either way it changes nothing until you pass `PAUL_REORDER_APPLY=1`**: on an
-   existing project the column order is usually something a team agreed in refinement, and
-   replacing it should be a decision rather than a side effect of processing a transcript. By
+    dependencies aren't all `done` yet sink below the ones ready to start, tie broken by PAUL
+    `order`. On an existing project the column order is usually something a team agreed in
+    refinement, and replacing it should be a decision rather than a side effect of processing
+    a transcript — hence the gate. Set `PAUL_REORDER_APPLY=1` in `paul.env` to enable (setup
+    asks), or run `scripts/reorder_board.sh` standalone for a preview. By
    default it reranks `todo` + `backlog`; `review`, `blocked` and `done` are always left untouched,
    and `in_progress` only if you set `PAUL_REORDER_INCLUDE_IN_PROGRESS=1`. mcp-atlassian has no
    rank tool, so applying calls the Jira Agile REST API (`PUT /rest/agile/1.0/issue/rank`)
@@ -421,7 +423,7 @@ All paths and keys are environment-overridable (defaults in parentheses):
 | `PAUL_ROLES` | built-in list | comma-separated [role vocabulary](./docs/ROLES.md) people are mapped to |
 | `PAUL_PROTECTED_TERMS` | built-in list | comma-separated terms the name scrub must never rewrite |
 | `PAUL_REWRITE_DESCRIPTIONS` | `0` | `1` lets the pipeline replace an existing Jira description with a re-rendered one |
-| `PAUL_REORDER_APPLY` | `0` | `1` actually re-ranks the board; otherwise the reorder is a preview |
+| `PAUL_REORDER_APPLY` | `0` | `1` runs the board reorder after each meeting (setup asks; default "no"). `0` skips it entirely — run `scripts/reorder_board.sh` standalone for a preview. |
 
 The last three behaviour switches are asked during `setup.sh` and stored in
 `~/.config/opencode/paul.env`; edit that file to change them at any time. The scripts read it

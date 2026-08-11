@@ -414,6 +414,51 @@ ok(roundTripped.meta.spec.approach.length === 2 && roundTripped.meta.spec.goal =
   "round-trip: meta.spec survives export_page -> import_page")
 ok(body.includes("needs detail"), "export_page: incomplete tickets flagged in the human summary")
 
+// 7b) An AGENTSMEMORY page written by an older PAUL (or hand-edited in Confluence)
+// may contain entries WITHOUT a createdAt field. import_page must backfill them so
+// paul_list (which sorts on createdAt) does not crash.
+const DIR2b = "/tmp/opencode-paul-verify2b"
+rmSync(DIR2b, { recursive: true, force: true })
+const ctx2b = { worktree: DIR2b, directory: DIR2b }
+const bodyNoCreatedAt = `<![CDATA[${JSON.stringify({ version: 1, project: "P",
+  cursor: { phase: "P1", note: "", updatedAt: "2026-01-01T00:00:00Z" },
+  entries: [{ id: "z9", type: "ticket", title: "no ts", status: "todo",
+              order: 5, meta: { externalId: "KAN-99" } }]
+})}]]>`
+const impB = J(await P.import_page.execute({ pageBody: bodyNoCreatedAt, pageId: "99", spaceKey: "SP" }, ctx2b))
+ok(impB.merged.added === 1, "import_page: imports entry lacking createdAt")
+const listB = J(await P.list.execute({}, ctx2b))
+ok(listB.count === 1 && listB.entries[0].title === "no ts",
+  "import_page: does NOT crash when remote entry lacks createdAt; list succeeds")
+ok(listB.entries[0].createdAt && listB.entries[0].updatedAt,
+  "import_page: backfills createdAt/updatedAt on entries missing them in the remote page")
+
+// 7c) A corrupt store file (entry without createdAt) must not crash paul_list —
+// load() normalizes entries on every read.
+const DIR2c = "/tmp/opencode-paul-verify2c"
+rmSync(DIR2c, { recursive: true, force: true })
+mkdirSync(DIR2c + "/.paul", { recursive: true })
+writeFileSync(DIR2c + "/.paul/memory.json", JSON.stringify({
+  version: 1, project: "P", cursor: { phase: "", note: "", updatedAt: "2026-01-01T00:00:00Z" },
+  remote: { title: "AGENTSMEMORY" },
+  entries: [{ id: "c1", type: "ticket", title: "corrupt", status: "todo", order: 3 }],
+}, null, 2) + "\n", "utf8")
+const listC = J(await P.list.execute({}, { worktree: DIR2c, directory: DIR2c }))
+ok(listC.count === 1 && listC.entries[0].title === "corrupt",
+  "list: does not crash on a store file whose entries lack createdAt (load normalizes)")
+ok(listC.entries[0].createdAt && listC.entries[0].updatedAt,
+  "list: backfilled createdAt/updatedAt for the corrupt entry from the store file")
+
+// 7d) brief mode strips meta.spec and details to save context on large stores.
+// The init test store has a ticket with meta.spec (KAN-5).
+const brief = J(await P.list.execute({ brief: true }, ctx))
+ok(brief.count > 0 && brief.entries.length > 0, "list: brief mode returns entries")
+const briefE = brief.entries.find((x) => x.meta?.externalId === "KAN-5")
+ok(briefE && briefE.meta && !briefE.meta.spec,
+  "list: brief mode omits meta.spec")
+ok(briefE && briefE.details === undefined,
+  "list: brief mode omits details")
+
 // 8) The read-only doc-init entrypoints: prompt contract + executable scripts.
 const REPO = new URL("..", import.meta.url).pathname
 const PROMPT = REPO + "prompts/init_from_docs.md"
@@ -553,6 +598,8 @@ ok(reorder.includes("PAUL_REORDER_INCLUDE_IN_PROGRESS")
   "reorder_board.sh: in_progress is opt-in via PAUL_REORDER_INCLUDE_IN_PROGRESS, not a new default")
 ok(meetings.includes("PAUL_REORDER_INCLUDE_IN_PROGRESS") && meetings.includes("PAUL_REORDER_STATUSES"),
   "process_meetings.sh forwards the reorder scope switches to reorder_board.sh")
+ok(/PAUL_REORDER_APPLY:-0\}" != \"1\"/.test(meetings) && meetings.includes("board reorder skipped"),
+  "process_meetings.sh skips the reorder entirely unless PAUL_REORDER_APPLY=1 (a 'no' in setup means the AI pipeline never runs)")
 
 // Board diagnostics: type + configured columns, logged so "why didn't column X move"
 // is answered in the log instead of guessed at. The backlog endpoint is classic-Kanban

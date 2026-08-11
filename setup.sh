@@ -662,8 +662,9 @@ echo "   about tickets that already exist — their description was written by a
 ask_toggle PAUL_REWRITE_DESCRIPTIONS \
   "Let PAUL rewrite the description of an existing Jira ticket?" "${STORED_PAUL_REWRITE_DESCRIPTIONS:-0}"
 
-echo "${DIM}   Board order: PAUL ranks tickets by its own priority order. Answering no still"
-echo "   prints the order it would apply, so you can look before letting it act.${RST}"
+echo "${DIM}   Board order: PAUL ranks tickets by its own priority order. Answering no"
+echo "   skips the board reorder entirely — the meeting pipeline never runs it.${RST}"
+echo "${DIM}   You can still preview standalone with scripts/reorder_board.sh.${RST}"
 REORDER_TARGET="the $JIRA_PROJECT board"
 [ -n "$JIRA_BOARD_NAMES" ] && REORDER_TARGET="board(s) $JIRA_BOARD_NAMES"
 ask_toggle PAUL_REORDER_APPLY \
@@ -752,8 +753,10 @@ export PAUL_CONFLUENCE_ROOT_TITLES="$CONFLUENCE_ROOT_TITLES"
 #     (New tickets are always created either way.)
 export PAUL_REWRITE_DESCRIPTIONS="${PAUL_REWRITE_DESCRIPTIONS:-0}"
 #
-# 1 = actually re-rank the Jira board to PAUL's priority order.
-# 0 = print the order it would apply and change nothing.
+# 1 = re-rank the Jira board after each meeting (the meeting pipeline calls
+#     scripts/reorder_board.sh). 0 = skip the board reorder entirely — the
+#     pipeline never invokes it (run scripts/reorder_board.sh standalone for
+#     a preview). Setup's default answer is "no" (0).
 export PAUL_REORDER_APPLY="${PAUL_REORDER_APPLY:-0}"
 #
 # 1 = when a board is scoped, let an AI (via OpenCode) decide the column mapping and

@@ -35,7 +35,8 @@ PHASE 1 — LOAD MEMORY (pull first, so your reasoning is not stale):
   confluence_search with cql: title = "{{AGENTSMEMORY_TITLE}}" AND space = "{{CONFLUENCE_SPACE}}".
 - If the page exists: confluence_get_page(page_id=<id>, convert_to_markdown: false) — storage
   format, the only call in this run that asks for it, because PAUL's machine state is a CDATA
-  block that markdown conversion would mangle. Then
+  block that markdown conversion would mangle. Pass ONLY page_id and convert_to_markdown —
+  never fields/expand/other args (mcp-atlassian's get_page rejects them). Then
   paul_import_page(pageBody=<body>, pageId=<id>, spaceKey="{{CONFLUENCE_SPACE}}").
 - Call paul_list (no args) and paul_cursor (no args). This is your full context: every entry's
   status, order, tags, and meta (including meta.spec — complexity, priority, timeEstimate,
