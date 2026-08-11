@@ -137,5 +137,5 @@ mostly names and unfiltered speech, and no downstream reader needs it.
 
 The scrub lives in `scrubNames` / `scrubDeep` in [`src/scrub.ts`](../src/scrub.ts); the vocabulary
 in `DEFAULT_ROLES` / `roleVocabulary()`. Extend the checks in
-[`scripts/verify.mjs`](../scripts/verify.mjs) alongside any change — that file asserts the exported
+[`scripts/verify.mjs`](../scripts/verify.mjs) and [`test/`](../test/) alongside any change — that file asserts the exported
 Confluence body contains no roster name.

@@ -137,6 +137,6 @@ older format stay detectable.
 ## Changing the format
 
 Edit `renderTicketDescription` in [`src/ticket.ts`](../src/ticket.ts), bump `TICKET_FORMAT_VERSION`,
-update this document, and extend the checks in [`scripts/verify.mjs`](../scripts/verify.mjs).
+update this document, and extend the checks in [`scripts/verify.mjs`](../scripts/verify.mjs) and [`test/`](../test/).
 Because the spec is stored structurally in `meta.spec`, existing tickets can be re-rendered into a
 new format without re-reading any transcript.

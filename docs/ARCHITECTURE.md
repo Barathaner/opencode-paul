@@ -127,6 +127,24 @@ green) never reaches the red write targets — it reads Confluence and Jira, wri
 `.paul/memory.json` and the `AGENTSMEMORY` mirror. `process_meetings.sh` is the one path that
 creates Jira issues, a Confluence notes page, and (optionally) re-ranks the board.
 
+### Implementation modules
+
+The PAUL tools box in the diagram is now split into small single-responsibility modules
+all in one language (TypeScript):
+
+| Layer | Module | Role |
+|---|---|---|
+| Domain | `src/types.ts`, `store.ts`, `roster.ts`, `scrub.ts`, `ticket.ts`, `page.ts` | Pure core — schema, JSON I/O, name→role rewrite, ticket rendering, mirror page |
+| Tools | `src/tools/*.ts` (11 files) | Thin verb definitions (`paul_add`, `paul_list`, …) calling the domain layer |
+| Utility | `src/config.ts`, `mcp-scope.ts`, `jira.ts`, `hash.ts`, `runner.ts` | Env/profile, MCP overlay, Jira REST, hash tracking, opencode spawning |
+| Prompts | `src/prompts/*.ts` + `prompts/*.md` | Template renderers (data in `.md`, logic in `.ts`) — kills the bash-heredoc injection vector |
+| Drivers | `src/cli/*.ts` | TS entrypoints (bash shims still primary for backward compat) |
+| Install | `src/install/*.ts` | Modular TS installer |
+| Entry | `plugin.ts` | Facade — one import for OpenCode |
+
+The shared `src/types.ts` is the cross-layer contract — where the old TS/bash split
+caused copy-paste drift, the single language now makes the type system the source of truth.
+
 ## Sequence diagram — `process_meetings.sh`
 
 ```mermaid
@@ -270,5 +288,5 @@ sequenceDiagram
 
 Update the diagrams whenever a phase's tool sequence changes in `process_meetings.sh` or
 `prompts/init_from_docs.md` — they describe what the code and prompts actually do, not an
-aspiration. `scripts/verify.mjs` cannot check a Markdown diagram, so keeping this current is a
+aspiration. `scripts/verify.mjs` and `test/` cannot check a Markdown diagram, so keeping this current is a
 manual discipline, same as `docs/TICKET_FORMAT.md`'s own "Changing the format" section.

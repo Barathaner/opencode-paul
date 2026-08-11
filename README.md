@@ -24,8 +24,10 @@ cd opencode-paul
 
 `setup.sh` will:
 
-1. Check/install prerequisites (`jq`, `curl`, Node, `opencode`, `uvx`).
-2. Install PAUL's eleven tools into `~/.config/opencode/tools/`.
+1. Check/install prerequisites (Node, `opencode`, `uvx`; `jq`/`curl` only needed by the legacy
+   bash shims — the TS core uses `fetch` and `crypto` instead).
+2. Register the PAUL plugin in `opencode.json` (the `"plugin":["opencode-paul"]` entry).
+   No file copies needed — OpenCode resolves it from npm or a local checkout.
 3. Ask for your **Atlassian base URL, email, API token**, Jira project key and Confluence
    space (get a token at
    [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)).
@@ -552,6 +554,34 @@ position. Lower `order` = higher priority on the board. Statuses:
 documentation summaries (with `meta.version` and `meta.parentId` for pages inside a tree),
 `meeting` entries the dated notes.
 
+## Repository layout
+
+```
+src/
+  types.ts             domain model (Entry, Store, TicketSpec, …)
+  store.ts             JSON store — atomic tmp+rename, load/save
+  roster.ts            name→role roster (gitignored, never exported)
+  scrub.ts             regex-based name→role rewrite + protected-term mask
+  ticket.ts            renderTicketDescription — deterministic format
+  page.ts              renderPageBody + extractStoreJson (Confluence mirror)
+  config.ts            env/profile loading (one copy, replaces 3× bash)
+  mcp-scope.ts         MCP server overlay builder
+  jira.ts              fetch-based Jira REST client
+  hash.ts              sha256 via node:crypto + processed_files.csv tracker
+  runner.ts            spawn opencode run --auto with timeout + overlay
+  prompts/             template renderers (process-meetings, init-from-docs, reorder-board)
+  tools/               11 paul_* tool definitions (add, list, update, …)
+  cli/                 TS driver entrypoints (bash shims still primary)
+  install/             TS installer modules (privileged operations via setup.sh)
+plugin.ts              OpenCode plugin entry (exports all 11 tools)
+test/                  per-module smoke tests (node:test)
+prompts/*.md           prompt templates — data format, rendered by src/prompts/
+docs/                  workflow docs (architecture, roles, ticket format, init protocol)
+scripts/               bash shims for cron/CLI compatibility
+setup.sh               interactive installer
+process_meetings.sh    meeting-transcript pipeline (bash shim → may call TS CLI)
+```
+
 ## Develop / test
 
 The implementation is split into small single-responsibility modules in [`src/`](./src/):
@@ -562,12 +592,13 @@ entry is [`plugin.ts`](./plugin.ts). Run the harness (no OpenCode agent loop / m
 required):
 
 ```bash
-npm test          # node --test --experimental-strip-types scripts/verify.mjs test/
+npm test          # node --test --experimental-strip-types scripts/verify.mjs && node --test --experimental-strip-types test/*.test.ts
 ```
 
 It exercises all eleven tools plus the plugin registration, the ticket renderer, the doc
-indexing path and the name→role scrub against throwaway stores, and checks that the read-only
-doc-init prompt still names every forbidden write tool.
+indexing path and the name→role scrub against throwaway stores. The legacy harness
+([`scripts/verify.mjs`](./scripts/verify.mjs), 199 assertions) validates the full tool suite;
+per-module smoke tests live in [`test/`](./test/) using `node:test`.
 
 ## Notes & gotchas
 

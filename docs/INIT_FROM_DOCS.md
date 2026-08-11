@@ -5,7 +5,8 @@ of specs and a Jira board full of issues, you should not have to wait for the ne
 PAUL to catch up — it can read what exists and learn from that.
 
 This is what `scripts/init_from_docs.sh` and the `/paul-init-docs` command do. Both drive the
-same protocol, which lives in one file: [`prompts/init_from_docs.md`](../prompts/init_from_docs.md).
+same protocol, which lives in one file: [`prompts/init_from_docs.md`](../prompts/init_from_docs.md)
+(the template — rendered by [`src/prompts/init-from-docs.ts`](../src/prompts/init-from-docs.ts)).
 See [`ARCHITECTURE.md`](./ARCHITECTURE.md#sequence-diagram--scriptsinit_from_docssh) for a
 phase-by-phase sequence diagram of this run.
 
