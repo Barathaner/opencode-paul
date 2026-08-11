@@ -147,10 +147,10 @@ PKG
   ok "created $OPENCODE_DIR/package.json"
 fi
 
-# Copy the self-contained tool file (drop-in path — always works, no npm needed).
-mkdir -p "$OPENCODE_DIR/tools"
-cp "$REPO_DIR/tool/paul.ts" "$OPENCODE_DIR/tools/paul.ts"
-ok "installed tools/paul.ts (11 paul_* tools)"
+# The plugin path (opencode.json "plugin": [...]) is the install method.
+# The legacy copy-a-file path (tool/paul.ts) has been deprecated; it now
+# re-exports from src/tools/ and is not self-contained.
+say "PAUL tools installed via plugin path (opencode.json)."
 
 # --- 3. collect Atlassian credentials ---------------------------------------
 hdr "3/7  Atlassian connection"

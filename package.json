@@ -24,12 +24,11 @@
   },
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./tool": "./tool/paul.ts"
+    ".": "./plugin.ts"
   },
   "files": [
+    "plugin.ts",
     "src/",
-    "tool/",
     "scripts/",
     "prompts/",
     "docs/",
@@ -38,10 +37,13 @@
     "process_meetings.sh",
     "AGENTS.snippet.md",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "tsconfig.json",
+    "package.json"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types scripts/verify.mjs"
+    "test": "node --test --experimental-strip-types scripts/verify.mjs && node --test --experimental-strip-types test/*.test.ts",
+    "test:smoke": "node --test --experimental-strip-types test/smoke.test.ts"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.0.0"

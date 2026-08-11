@@ -69,7 +69,7 @@ flowchart LR
 
     OC["OpenCode agent loop\n(opencode run --auto)"]
 
-    subgraph PAULTools["PAUL tools (tool/paul.ts)"]
+    subgraph PAULTools["PAUL tools (src/tools/ + src/)"]
         LIST["paul_list / paul_cursor"]
         WRITE["paul_add / paul_update / paul_remove"]
         ROLES["paul_roles"]

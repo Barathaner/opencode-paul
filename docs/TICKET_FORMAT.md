@@ -3,7 +3,7 @@
 Every ticket, action item and task PAUL produces has the same shape. The agent decides the
 *content*; the `paul_ticket_body` tool decides the *layout*. That is the whole point: a format
 described only in a prompt drifts with every model and every run, so the format lives in code
-(`renderTicketDescription` in [`tool/paul.ts`](../tool/paul.ts)) and the agent is required to
+(`renderTicketDescription` in [`src/ticket.ts`](../src/ticket.ts)) and the agent is required to
 render through it rather than hand-writing a description.
 
 A ticket, an action item and a PAUL entry are the same object at three stages, so they share one
@@ -136,7 +136,7 @@ older format stay detectable.
 
 ## Changing the format
 
-Edit `renderTicketDescription` in [`tool/paul.ts`](../tool/paul.ts), bump `TICKET_FORMAT_VERSION`,
+Edit `renderTicketDescription` in [`src/ticket.ts`](../src/ticket.ts), bump `TICKET_FORMAT_VERSION`,
 update this document, and extend the checks in [`scripts/verify.mjs`](../scripts/verify.mjs).
 Because the spec is stored structurally in `meta.spec`, existing tickets can be re-rendered into a
 new format without re-reading any transcript.

@@ -184,10 +184,10 @@ is never uploaded and never logged. Full reference: [`docs/ROLES.md`](./docs/ROL
 
 ## Manual install (advanced)
 
-The quick start above is the recommended path. If you'd rather wire it up yourself, there
-are two ways. The **plugin** path is easiest to share; the **custom-tool** path needs no npm.
+The quick start above is the recommended path. If you'd rather wire it up yourself, add PAUL
+as an OpenCode plugin:
 
-### Option A — as a plugin (recommended)
+### As a plugin
 
 Add the package to your OpenCode config. OpenCode auto-installs it with Bun at startup.
 
@@ -206,21 +206,6 @@ Install straight from GitHub without publishing to npm:
 ```
 
 (Once published: `{ "plugin": ["opencode-paul"] }` resolves from the npm registry.)
-
-### Option B — as a drop-in custom tool (no npm)
-
-Clone and run the installer; it copies the single self-contained tool file into your
-global tools directory:
-
-```bash
-git clone https://github.com/Barathaner/opencode-paul.git
-cd opencode-paul
-./scripts/install.sh          # copies tool/paul.ts -> ~/.config/opencode/tools/paul.ts
-```
-
-Or manually: copy `tool/paul.ts` into `~/.config/opencode/tools/` (global) or
-`<your-project>/.opencode/tools/` (project-scoped). The filename `paul.ts` makes the
-tools `paul_list`, `paul_add`, … automatically.
 
 ### Teach the agent when to use it
 
@@ -569,12 +554,15 @@ documentation summaries (with `meta.version` and `meta.parentId` for pages insid
 
 ## Develop / test
 
-The implementation lives once in [`tool/paul.ts`](./tool/paul.ts); the plugin entry
-[`src/index.ts`](./src/index.ts) re-exports it so both install paths share one source (no
-drift). Run the harness (no OpenCode agent loop / model endpoint required):
+The implementation is split into small single-responsibility modules in [`src/`](./src/):
+[`types.ts`](./src/types.ts) for the domain model, [`store.ts`](./src/store.ts) for the JSON
+store, [`ticket.ts`](./src/ticket.ts) for ticket rendering, [`scrub.ts`](./src/scrub.ts) for the
+name→role rewrite, and eleven thin tool files in [`src/tools/`](./src/tools/). The plugin
+entry is [`plugin.ts`](./plugin.ts). Run the harness (no OpenCode agent loop / model endpoint
+required):
 
 ```bash
-npm test          # node --experimental-strip-types scripts/verify.mjs
+npm test          # node --test --experimental-strip-types scripts/verify.mjs test/
 ```
 
 It exercises all eleven tools plus the plugin registration, the ticket renderer, the doc

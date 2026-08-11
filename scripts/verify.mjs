@@ -11,8 +11,20 @@
  */
 import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, accessSync, constants } from "node:fs"
 import { execSync } from "node:child_process"
-import * as P from "../tool/paul.ts"
-import { PaulPlugin } from "../src/index.ts"
+import { list } from "../src/tools/list.ts"
+import { add } from "../src/tools/add.ts"
+import { update } from "../src/tools/update.ts"
+import { remove } from "../src/tools/remove.ts"
+import { cursor } from "../src/tools/cursor.ts"
+import { roles } from "../src/tools/roles.ts"
+import { ticket_body } from "../src/tools/ticket-body.ts"
+import { init } from "../src/tools/init.ts"
+import { remote } from "../src/tools/remote.ts"
+import { export_page } from "../src/tools/export-page.ts"
+import { import_page } from "../src/tools/import-page.ts"
+import { PaulPlugin } from "../plugin.ts"
+
+const P = { list, add, update, remove, cursor, roles, ticket_body, init, remote, export_page, import_page }
 
 let pass = 0, fail = 0
 const ok = (c, m) => { c ? (pass++, console.log("PASS " + m)) : (fail++, console.log("FAIL " + m)) }
@@ -501,7 +513,7 @@ ok(SHIPPED_SCRIPTS.every((p) => readFileSync(REPO + p, "utf8").includes("paul.en
 
 // 9) Packaging: an npm install must ship everything the shipped scripts read at runtime.
 const pkg = JSON.parse(readFileSync(REPO + "package.json", "utf8"))
-const NEEDED = ["src/", "tool/", "scripts/", "prompts/"]
+const NEEDED = ["plugin.ts", "src/", "scripts/", "prompts/"]
 const missingFiles = NEEDED.filter((d) => !(pkg.files || []).includes(d))
 ok(missingFiles.length === 0,
   `package.json files[] ships every runtime dir${missingFiles.length ? ` (missing: ${missingFiles})` : ""}`)
