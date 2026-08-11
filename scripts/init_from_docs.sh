@@ -113,9 +113,9 @@ paul_load_env() {
   if [ -z "$p" ]; then
     for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
              PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
-             PAUL_JIRA_BOARD_SUBFILTERS PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
+             PAUL_JIRA_BOARD_SUBFILTERS PAUL_JIRA_BOARD_COLUMN_MAP PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
              PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
-             PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES \
+             PAUL_REORDER_APPLY PAUL_REORDER_INCLUDE_IN_PROGRESS PAUL_REORDER_AI PAUL_REORDER_AI_TIMEOUT PAUL_PROTECTED_TERMS PAUL_ROLES \
              PAUL_STALE_MARKERS PAUL_STALE_LABELS \
              PAUL_MEETING_NOTES_PARENT_TITLE PAUL_MEETING_NOTES_PARENT_ID; do
       [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
@@ -223,6 +223,12 @@ fi
 # Branch results handed from a subagent to paul_init via mergePaths. Scratch, not memory.
 if ! grep -qsF ".paul/init-*.json" "$PROJECT_DIR/.gitignore"; then
   echo ".paul/init-*.json" >> "$PROJECT_DIR/.gitignore"
+fi
+# AI-mode board reorder plans + their run logs — scratch reorder_board.sh reads once,
+# not memory. This entrypoint never calls reorder_board.sh itself, but shares the same
+# .paul/ directory, so the ignore rule belongs here too.
+if ! grep -qsF ".paul/reorder_plan.*.json" "$PROJECT_DIR/.gitignore"; then
+  printf '%s\n%s\n' ".paul/reorder_plan.*.json" ".paul/reorder_ai_board_*.log" >> "$PROJECT_DIR/.gitignore"
 fi
 
 log() {

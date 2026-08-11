@@ -184,8 +184,23 @@ sequenceDiagram
 
     Note over Script: PHASE 5 — board reorder (separate script)
     Script->>Script: scripts/reorder_board.sh
+    Script->>Script: for each board: log type (kanban/scrum/simple) + configured columns
+    alt AI mode possible (board scoped + opencode reachable + PAUL_REORDER_AI!=0)
+        Script->>Script: disable every other Atlassian MCP server for this call\n(same overlay as process_meetings.sh/init_from_docs.sh)
+        Script->>Agent: opencode run --auto "<prompts/reorder_board.md, per board>"\n(bounded by PAUL_REORDER_AI_TIMEOUT, default 600s)
+        Note over Agent,PAUL: agent pulls fresh AGENTSMEMORY memory, reads the board's\nACTUAL columns, decides mapping + ranking with judgment
+        Agent->>Script: writes .paul/reorder_plan.<board_id>.json
+        alt plan file valid
+            Script->>Jira: PUT /rest/agile/1.0/issue/rank (in the AI-decided order,\nonly columns mapped to REORDER_STATUSES)
+        else agent run failed, timed out, or no valid plan
+            Script->>Script: fall back to JQ mode for this board only\n(exit code distinguishes timeout / killed-by-signal / normal failure)
+        end
+    else JQ mode (unscoped, or AI unavailable)
+        Script->>Jira: GET /board/{id}/issue, GET /board/{id}/backlog (kanban only, union,\n404 or 400 tolerated — Jira Cloud returns either for "no backlog view")
+        Script->>Script: split actionable (deps done/untracked) vs. blocked, sort within each group
+    end
     alt PAUL_REORDER_APPLY=1
-        Script->>Jira: PUT /rest/agile/1.0/issue/rank
+        Script->>Jira: PUT /rest/agile/1.0/issue/rank (todo + backlog,\n+ in_progress if PAUL_REORDER_INCLUDE_IN_PROGRESS=1)
     else default
         Script->>Script: preview only, nothing written
     end

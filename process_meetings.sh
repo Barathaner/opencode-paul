@@ -71,9 +71,9 @@ paul_load_env() {
   if [ -z "$p" ]; then
     for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
              PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
-             PAUL_JIRA_BOARD_SUBFILTERS PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
+             PAUL_JIRA_BOARD_SUBFILTERS PAUL_JIRA_BOARD_COLUMN_MAP PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
              PAUL_JIRA_RANK_FIELD PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS \
-             PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS PAUL_ROLES \
+             PAUL_REORDER_APPLY PAUL_REORDER_INCLUDE_IN_PROGRESS PAUL_REORDER_AI PAUL_REORDER_AI_TIMEOUT PAUL_PROTECTED_TERMS PAUL_ROLES \
              PAUL_STALE_MARKERS PAUL_STALE_LABELS \
              PAUL_MEETING_NOTES_PARENT_TITLE PAUL_MEETING_NOTES_PARENT_ID; do
       [ -n "${!v:-}" ] && keep="$keep $v=$(printf '%q' "${!v}")"
@@ -129,6 +129,11 @@ fi
 # Branch results handed from a subagent to paul_init via mergePaths. Scratch, not memory.
 if ! grep -qsF ".paul/init-*.json" "$PROJECT_DIR/.gitignore"; then
   echo ".paul/init-*.json" >> "$PROJECT_DIR/.gitignore"
+fi
+# AI-mode board reorder plans + their run logs — scratch the AI writes and reorder_board.sh
+# reads once, not memory.
+if ! grep -qsF ".paul/reorder_plan.*.json" "$PROJECT_DIR/.gitignore"; then
+  printf '%s\n%s\n' ".paul/reorder_plan.*.json" ".paul/reorder_ai_board_*.log" >> "$PROJECT_DIR/.gitignore"
 fi
 
 # Create tracking CSV if it doesn't exist
@@ -382,14 +387,17 @@ if [ $OPENCODE_EXIT_CODE -eq 0 ]; then
 
   # --- PHASE 5: reorder the Jira board to match PAUL memory ---
   # mcp-atlassian has no rank tool, so we rank via the Agile REST API here.
-  # Only touches the todo (open / "Zu erledigen") and backlog columns; leaves
-  # in_progress / review / blocked / done untouched.
+  # Touches the todo (open / "Zu erledigen") and backlog columns by default; also
+  # in_progress if PAUL_REORDER_INCLUDE_IN_PROGRESS=1. review / blocked / done are
+  # never touched.
   # PREVIEW unless PAUL_REORDER_APPLY=1: the column order is usually something the
   # team agreed, and re-ranking it should be a decision, not a side effect.
   REORDER_SCRIPT="$(cd "$(dirname "$0")" && pwd)/scripts/reorder_board.sh"
   if [ -x "$REORDER_SCRIPT" ]; then
+    REORDER_SCOPE_DESC="todo + backlog columns"
+    [ "${PAUL_REORDER_INCLUDE_IN_PROGRESS:-0}" = "1" ] && REORDER_SCOPE_DESC="$REORDER_SCOPE_DESC + in_progress"
     if [ "${PAUL_REORDER_APPLY:-0}" = "1" ]; then
-      log "Reordering Jira board from PAUL memory (todo + backlog columns)..."
+      log "Reordering Jira board from PAUL memory ($REORDER_SCOPE_DESC)..."
     else
       log "Previewing board order from PAUL memory (set PAUL_REORDER_APPLY=1 to apply)..."
     fi
@@ -398,6 +406,8 @@ if [ $OPENCODE_EXIT_CODE -eq 0 ]; then
     PAUL_JIRA_EMAIL="${PAUL_JIRA_EMAIL:-${JIRA_USERNAME:-}}" \
     ATLASSIAN_API_TOKEN="${ATLASSIAN_API_TOKEN:-}" \
     PAUL_REORDER_APPLY="${PAUL_REORDER_APPLY:-0}" \
+    PAUL_REORDER_STATUSES="${PAUL_REORDER_STATUSES:-}" \
+    PAUL_REORDER_INCLUDE_IN_PROGRESS="${PAUL_REORDER_INCLUDE_IN_PROGRESS:-0}" \
     PAUL_JIRA_BOARDS="${PAUL_JIRA_BOARDS:-}" \
     PAUL_JIRA_BOARD_NAMES="${PAUL_JIRA_BOARD_NAMES:-}" \
     PAUL_JIRA_RANK_FIELD="${PAUL_JIRA_RANK_FIELD:-}" \

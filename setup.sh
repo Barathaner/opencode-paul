@@ -173,12 +173,23 @@ if [ -f "$SECRETS" ]; then
            ATLASSIAN_API_TOKEN="${!TOKEN_VAR:-${ATLASSIAN_API_TOKEN:-}}"
            for v in ATLASSIAN_API_TOKEN PAUL_JIRA_URL PAUL_JIRA_EMAIL PAUL_JIRA_PROJECT \
                     PAUL_JIRA_BOARDS PAUL_JIRA_BOARD_NAMES PAUL_JIRA_BOARD_FILTERS \
-                    PAUL_JIRA_BOARD_SUBFILTERS PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
+                    PAUL_JIRA_BOARD_SUBFILTERS PAUL_JIRA_BOARD_COLUMN_MAP \
+                    PAUL_CONFLUENCE_ROOTS PAUL_CONFLUENCE_ROOT_TITLES \
                     PAUL_CONFLUENCE_SPACE PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY \
+                    PAUL_REORDER_AI PAUL_REORDER_INCLUDE_IN_PROGRESS \
                     PAUL_PROTECTED_TERMS PAUL_STALE_MARKERS PAUL_STALE_LABELS; do
              printf 'STORED_%s=%q\n' "$v" "${!v-}"
            done )"
   ok "found existing settings in $SECRETS — press Enter at any prompt to keep them"
+fi
+# Decode the stored column map (base64 JSON) once, as plain JSON, so the per-board
+# prompt below can offer each column's PRIOR mapping as its default without re-decoding.
+STORED_PAUL_JIRA_BOARD_COLUMN_MAP_JSON="{}"
+if [ -n "${STORED_PAUL_JIRA_BOARD_COLUMN_MAP:-}" ]; then
+  DECODED="$(printf '%s' "$STORED_PAUL_JIRA_BOARD_COLUMN_MAP" | jq -sRr '@base64d' 2>/dev/null | tr -d '\n')"
+  if [ -n "$DECODED" ] && printf '%s' "$DECODED" | jq -e . >/dev/null 2>&1; then
+    STORED_PAUL_JIRA_BOARD_COLUMN_MAP_JSON="$DECODED"
+  fi
 fi
 
 # The prompts below all speak the plain name; only the files and opencode.json use the
@@ -276,6 +287,33 @@ ask        JIRA_URL          "Atlassian base URL (e.g. https://you.atlassian.net
                              "${STORED_PAUL_JIRA_URL:-}"
 ask        JIRA_EMAIL        "Atlassian account email" "${STORED_PAUL_JIRA_EMAIL:-}"
 ask_secret ATLASSIAN_API_TOKEN "Atlassian API token (hidden)" "${STORED_ATLASSIAN_API_TOKEN:-}"
+# A real Atlassian API token never contains a path separator or whitespace. This is a
+# SHAPE check only, not a full validation — a self-hosted or future token format may
+# legitimately look different. But in NONINTERACTIVE mode the value that reaches here
+# can be an ENVIRONMENT LEFTOVER from something unrelated the caller's shell had set
+# (e.g. a stray `ATLASSIAN_API_TOKEN=/path/to/some.log` from an earlier debugging
+# session) — with no prompt to catch a human's eye, that leftover would otherwise be
+# written straight to paul.env AND the per-profile token file, silently breaking every
+# later Atlassian call until someone notices, possibly after it has also overwritten a
+# previously-working token with no way to recover it. A value containing '/' is never a
+# real token, so NONINTERACTIVE mode refuses to write it rather than writing garbage
+# unattended; a value with whitespace only warns, since it is a softer signal.
+case "$ATLASSIAN_API_TOKEN" in
+  */*)
+    if [ "$NONINTERACTIVE" = "1" ]; then
+      die "ATLASSIAN_API_TOKEN='${ATLASSIAN_API_TOKEN:0:60}...' contains '/' — that is never a real" \
+          "Atlassian API token, and looks like a leftover from something else in your shell's" \
+          "environment. Refusing to write it over your existing settings; unset it and re-run, or" \
+          "pass the real token explicitly."
+    else
+      warn "ATLASSIAN_API_TOKEN does not look like a real Atlassian API token (contains '/') —"
+      warn "  got: ${ATLASSIAN_API_TOKEN:0:40}...  Re-check this before continuing."
+    fi
+    ;;
+  *" "*)
+    warn "ATLASSIAN_API_TOKEN contains a space, which is unusual for a real token — got: ${ATLASSIAN_API_TOKEN:0:40}..."
+    ;;
+esac
 ask_key    JIRA_PROJECT      "Jira project key" "${STORED_PAUL_JIRA_PROJECT:-KAN}" \
                              '^[A-Z][A-Z0-9_]{1,9}$' "Jira project key" upper
 # Personal Confluence spaces are "~" plus a lowercase account id, so this one is
@@ -500,6 +538,7 @@ if [ -n "$JIRA_BOARDS" ] && [ -n "$BOARDS_JSON" ]; then
   JIRA_BOARD_NAMES=$(jq -r --arg sel ",${JIRA_BOARDS}," \
     '[ .[] | (.id | tostring) as $id | select($sel | contains("," + $id + ",")) | .name ]
      | join(",")' <<<"$BOARDS_JSON")
+  COLUMN_MAP_JSON="{}"
   for id in $(printf '%s' "$JIRA_BOARDS" | tr ',' ' '); do
     CFG_CODE=$(api_code "$JIRA_URL/rest/agile/1.0/board/$id/configuration" "$RESP")
     if [ "$CFG_CODE" = "200" ]; then
@@ -515,10 +554,31 @@ if [ -n "$JIRA_BOARDS" ] && [ -n "$BOARDS_JSON" ]; then
         JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS$(paul_subfilter_encode "$SUBQ")"
         NSUBS=$((NSUBS + 1))
       fi
+      # Which PAUL status does each of THIS board's actual columns represent? Asked once
+      # here rather than guessed by string-matching column names against PAUL's own
+      # status words — a column named "Zu erledigen" or "In Review" would never match
+      # "todo"/"review" by string comparison, and a board's columns are whatever the team
+      # named them. The AI reorder run (prompts/reorder_board.md) re-derives this if the
+      # board's columns changed since, so a stale or missing mapping is not load-bearing.
+      COLS=$(jq -r '(.columnConfig.columns // [])[] | .name' "$RESP" 2>/dev/null)
+      if [ -n "$COLS" ] && [ "${PAUL_SKIP_CHECKS:-0}" != "1" ] && [ "$NONINTERACTIVE" != "1" ]; then
+        echo
+        echo "   ${BOLD}Board $id's columns.${RST} Which PAUL status does each represent?"
+        echo "   ${DIM}(backlog | todo | in_progress | review | blocked | done | skip — skip = never reranked)${RST}"
+        BOARD_MAP="{}"
+        while IFS= read -r COLNAME; do
+          [ -n "$COLNAME" ] || continue
+          PRIOR=$(jq -r --arg id "$id" --arg c "$COLNAME" '.[$id][$c] // ""' <<<"${STORED_PAUL_JIRA_BOARD_COLUMN_MAP_JSON:-{}}" 2>/dev/null)
+          ask "COL_STATUS" "     \"$COLNAME\" ->" "${PRIOR:-}"
+          BOARD_MAP=$(jq -c --arg c "$COLNAME" --arg s "$COL_STATUS" '.[$c] = $s' <<<"$BOARD_MAP")
+        done <<<"$COLS"
+        COLUMN_MAP_JSON=$(jq -c --arg id "$id" --argjson m "$BOARD_MAP" '.[$id] = $m' <<<"$COLUMN_MAP_JSON")
+      fi
     else
       warn "could not read board $id configuration (HTTP $CFG_CODE) — it will not narrow the doc index"
     fi
   done
+  PAUL_JIRA_BOARD_COLUMN_MAP=$(printf '%s' "$COLUMN_MAP_JSON" | jq -c . 2>/dev/null | jq -sRr @base64)
   ok "PAUL will use board(s) ${BOLD}${JIRA_BOARD_NAMES}${RST} ${DIM}(ids $JIRA_BOARDS)${RST}"
 fi
 
@@ -609,6 +669,24 @@ REORDER_TARGET="the $JIRA_PROJECT board"
 ask_toggle PAUL_REORDER_APPLY \
   "Let PAUL re-rank $REORDER_TARGET to match that order?" "${STORED_PAUL_REORDER_APPLY:-0}"
 
+echo "${DIM}   Deciding the order: when a board is scoped, PAUL can ask an AI (via OpenCode) to"
+echo "   read the board's actual columns and reason over priority/dependencies/roadmap"
+echo "   context to decide the ranking. Answering no uses a fixed rule instead (priority +"
+echo "   dependency status only) — no model call, fully deterministic.${RST}"
+if [ -n "$JIRA_BOARDS" ]; then
+  ask_toggle PAUL_REORDER_AI \
+    "Let an AI decide the board order (needs the opencode binary at reorder time)?" "${STORED_PAUL_REORDER_AI:-1}"
+else
+  # No board scoped: AI mode has no single board to read real columns from, so this
+  # toggle would do nothing either way — asking it would be a decision with no effect.
+  PAUL_REORDER_AI="${STORED_PAUL_REORDER_AI:-1}"
+fi
+
+echo "${DIM}   In Progress column: reranking a column people are actively working from is more"
+echo "   disruptive than reranking todo/backlog, so it is off by default.${RST}"
+ask_toggle PAUL_REORDER_INCLUDE_IN_PROGRESS \
+  "Also rerank the in_progress column?" "${STORED_PAUL_REORDER_INCLUDE_IN_PROGRESS:-0}"
+
 echo "${DIM}   Names become roles, so a first name that is also a product name gets rewritten:"
 echo "   with a 'Paul' on the team, 'Paul memory' would become 'Full-stack Developer memory'."
 echo "   List product/vendor names to protect (comma-separated), or leave empty.${RST}"
@@ -658,6 +736,10 @@ export PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS"
 # Each board's sub-filter, base64, one slot per filter id above. A Kanban board's saved
 # filter is usually the whole project; this second query is what the board actually shows.
 export PAUL_JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS"
+# Per-board column-name -> PAUL-status mapping, base64 JSON: {"<board_id>": {"<column
+# name>": "<status>"}}. The AI reorder run (scripts/reorder_board.sh) uses this as a
+# starting point and re-derives it from the board's actual columns when it looks stale.
+export PAUL_JIRA_BOARD_COLUMN_MAP="${PAUL_JIRA_BOARD_COLUMN_MAP:-}"
 export PAUL_CONFLUENCE_ROOTS="$CONFLUENCE_ROOTS"
 export PAUL_CONFLUENCE_ROOT_TITLES="$CONFLUENCE_ROOT_TITLES"
 
@@ -673,6 +755,15 @@ export PAUL_REWRITE_DESCRIPTIONS="${PAUL_REWRITE_DESCRIPTIONS:-0}"
 # 1 = actually re-rank the Jira board to PAUL's priority order.
 # 0 = print the order it would apply and change nothing.
 export PAUL_REORDER_APPLY="${PAUL_REORDER_APPLY:-0}"
+#
+# 1 = when a board is scoped, let an AI (via OpenCode) decide the column mapping and
+#     the ranking within each column, using full PAUL memory and its own judgment.
+# 0 = always use the fixed rule instead (priority + dependency status only).
+export PAUL_REORDER_AI="${PAUL_REORDER_AI:-1}"
+#
+# 1 = also rerank the in_progress column (more disruptive — people are actively working
+#     from it). 0 = only todo + backlog, leaving in_progress exactly as it is.
+export PAUL_REORDER_INCLUDE_IN_PROGRESS="${PAUL_REORDER_INCLUDE_IN_PROGRESS:-0}"
 #
 # Comma-separated product/vendor names the name-scrub must never rewrite, for when
 # a teammate's name is also a product name (e.g. "Carl Zeiss,ACME Payments").
@@ -706,9 +797,10 @@ export PAUL_JIRA_BOARDS="$JIRA_BOARDS"
 export PAUL_JIRA_BOARD_NAMES="$JIRA_BOARD_NAMES"
 export PAUL_JIRA_BOARD_FILTERS="$JIRA_BOARD_FILTERS"
 export PAUL_JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS"
+export PAUL_JIRA_BOARD_COLUMN_MAP="${PAUL_JIRA_BOARD_COLUMN_MAP:-}"
 export PAUL_CONFLUENCE_ROOTS="$CONFLUENCE_ROOTS"
 export PAUL_CONFLUENCE_ROOT_TITLES="$CONFLUENCE_ROOT_TITLES"
-export PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY PAUL_PROTECTED_TERMS
+export PAUL_REWRITE_DESCRIPTIONS PAUL_REORDER_APPLY PAUL_REORDER_AI PAUL_REORDER_INCLUDE_IN_PROGRESS PAUL_PROTECTED_TERMS
 export PAUL_STALE_MARKERS PAUL_STALE_LABELS
 
 # 5b. merge opencode.json non-destructively (backup first).

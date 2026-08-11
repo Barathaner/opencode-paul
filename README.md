@@ -376,17 +376,27 @@ What each run does, in order:
    ticket a PAUL `order` from those attributes.
 6. **Push memory** — exports and updates the `AGENTSMEMORY` page, so the next run — or a
    teammate on another machine — starts from this meeting's state.
-7. **Preview the board order** — `scripts/reorder_board.sh` prints the order the board *would*
-   have if it matched PAUL's `order`, so the **open / "Zu erledigen"** column (and a **backlog**
-   column if present) would read top-to-bottom in do-this-first order. **It changes nothing until
-   you pass `PAUL_REORDER_APPLY=1`**: on an existing project the column order is usually something
-   a team agreed in refinement, and replacing it should be a decision rather than a side effect of
-   processing a transcript. It only ever reranks `todo` + `backlog`; `in_progress`, `review`,
-   `blocked` and `done` are left untouched. mcp-atlassian has no rank tool, so applying calls the
-   Jira Agile REST API (`PUT /rest/agile/1.0/issue/rank`) directly. With boards selected
-   (`PAUL_JIRA_BOARDS`), each board is ranked on its own — its own rank field, only the tickets
-   actually on it — and anything on none of them is reported as untouched rather than silently
-   ranked on whichever board owns the default rank field.
+7. **Preview the board order** — `scripts/reorder_board.sh` decides the order the board *would*
+   have if it matched PAUL's priorities. When a board is scoped (`PAUL_JIRA_BOARDS`) and OpenCode
+   is reachable, it does this by asking the agent: pulling PAUL memory fresh from AGENTSMEMORY,
+   reading the board's ACTUAL columns (never assuming a column named "Zu erledigen" or "In Review"
+   matches a PAUL status by string comparison), and reasoning over priority, dependencies,
+   complexity, background docs and the roadmap cursor to decide each column's order — not a fixed
+   formula. That decision is written to a plan file; this script only applies it via the rank API.
+   Without a board scope, or if AI mode is off/unavailable (`PAUL_REORDER_AI=0`, no `opencode`
+   binary), it falls back to a deterministic rule: within each column, tickets whose tracked
+   dependencies aren't all `done` yet sink below the ones ready to start, tie broken by PAUL
+   `order`. **Either way it changes nothing until you pass `PAUL_REORDER_APPLY=1`**: on an
+   existing project the column order is usually something a team agreed in refinement, and
+   replacing it should be a decision rather than a side effect of processing a transcript. By
+   default it reranks `todo` + `backlog`; `review`, `blocked` and `done` are always left untouched,
+   and `in_progress` only if you set `PAUL_REORDER_INCLUDE_IN_PROGRESS=1`. mcp-atlassian has no
+   rank tool, so applying calls the Jira Agile REST API (`PUT /rest/agile/1.0/issue/rank`)
+   directly. With boards selected, each is ranked on its own — its own rank field, only the
+   tickets actually on it (its type and configured columns are logged, and a separate backlog
+   view is read and unioned in where the board has one) — and anything on none of them is
+   reported as untouched rather than silently ranked on whichever board owns the default rank
+   field.
 
 A `processed_files.csv` hash-tracker skips transcripts that were already processed. The
 script runs OpenCode from a dedicated project dir (`PAUL_PROJECT_DIR`, a git repo) so
@@ -446,10 +456,38 @@ standalone) needs Jira REST credentials — reuse your Atlassian ones:
 | `PAUL_JIRA_EMAIL` | Atlassian account email (falls back to `JIRA_USERNAME`) |
 | `ATLASSIAN_API_TOKEN` | Atlassian API token |
 | `PAUL_REORDER_APPLY=1` | **required to actually rank the board** — without it this is a preview |
+| `PAUL_REORDER_AI=0` | force the deterministic JQ fallback even when AI mode is possible (default: AI mode when a board is scoped and `opencode` is reachable) |
 | `PAUL_REORDER_STATUSES` | statuses to rerank (default `todo backlog`) |
-| `PAUL_JIRA_BOARDS` | board ids to rank. Each is ranked separately, with its own rank field and only the tickets on it; tickets on none of them are listed as untouched. Empty = one unscoped chain |
+| `PAUL_REORDER_INCLUDE_IN_PROGRESS=1` | also rerank `in_progress` for this run — off by default; reranking a column people are actively working from is more disruptive than todo/backlog |
+| `PAUL_JIRA_BOARDS` | board ids to rank. Each is ranked separately, with its own rank field and only the tickets on it (its board type and configured columns are logged); tickets on none of them are listed as untouched. Empty = one unscoped chain, always JQ mode (there is no single board to read real columns from) |
+| `PAUL_JIRA_BOARD_COLUMN_MAP` | base64 JSON starting point for column-name -> PAUL-status, written by `setup.sh`'s per-board column prompt. AI mode treats it as a starting point and re-derives the mapping itself when a board's columns have changed |
 | `PAUL_JIRA_RANK_FIELD` | LexoRank field id (`10019` or `customfield_10019`) — overrides the field read from each board's configuration. Normally unset |
+| `OPENCODE_BIN` | path to the `opencode` binary, needed for AI mode (default `~/.opencode/bin/opencode`) |
+| `PAUL_REORDER_AI_TIMEOUT` | seconds before an AI-mode board decision times out and that ONE board falls back to JQ mode (default `600`; needs the `timeout` binary) |
 | `DRY_RUN=1` | force preview mode even when `PAUL_REORDER_APPLY=1` |
+
+**AI mode** (default, when a board is scoped): the agent — not this script — decides both the
+column->status mapping and the ranking within each column, using full PAUL memory (priority,
+complexity, dependencies, background docs, the roadmap cursor) rather than a fixed formula. It
+writes its decision to `.paul/reorder_plan.<board_id>.json`; `reorder_board.sh` then only reads
+that file and calls the rank API in the order given — it never invents an order itself in this
+mode. Like `process_meetings.sh`/`init_from_docs.sh`, this run disables every other configured
+Atlassian MCP server for its duration, so a machine with two sites wired up cannot have the agent
+read/decide against the wrong one. If the agent run fails for a board, times out, or writes no
+valid plan, that ONE board falls back to
+JQ mode rather than aborting the whole run.
+
+**JQ mode** (fallback, or always when unscoped): within the reranked statuses, tickets are split
+into two groups before sorting by PAUL `order`: **actionable** (every dependency in
+`meta.spec.dependencies` that resolves to a tracked PAUL entry is already `done`, or the
+dependency isn't tracked at all) rank above **blocked** (at least one tracked dependency is not
+`done` yet) — so the column reads top-to-bottom as an actual workable path, not just a flat
+priority list. A ticket's own `order` only decides its position within its group.
+
+On a Kanban board with a separate backlog view, `/board/{id}/issue` does not always include those
+issues — JQ mode also reads `/board/{id}/backlog` and unions the results in (team-managed/Scrum
+boards 400/404 on that endpoint and are skipped for it), so a backlog ticket PAUL wants ranked is
+never silently treated as "not on this board".
 
 Requires the `mcp-atlassian` MCP server wired up (see below) and a working `opencode`
 model endpoint. Trigger it from a file watcher / cron / Teams webhook per new transcript.

@@ -10,6 +10,7 @@
  * Exit code 0 = all pass, 1 = a failure.
  */
 import { rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, accessSync, constants } from "node:fs"
+import { execSync } from "node:child_process"
 import * as P from "../tool/paul.ts"
 import { PaulPlugin } from "../src/index.ts"
 
@@ -455,11 +456,12 @@ ok(meetings.includes("PAUL_REWRITE_DESCRIPTIONS") && meetings.includes("DO NOT m
   "process_meetings.sh leaves existing Jira descriptions alone unless PAUL_REWRITE_DESCRIPTIONS=1")
 
 // setup.sh must ask about the behaviour switches and store them where it says it does.
-const SWITCHES = ["PAUL_REWRITE_DESCRIPTIONS", "PAUL_REORDER_APPLY", "PAUL_PROTECTED_TERMS"]
+const SWITCHES = ["PAUL_REWRITE_DESCRIPTIONS", "PAUL_REORDER_APPLY", "PAUL_REORDER_AI",
+  "PAUL_REORDER_INCLUDE_IN_PROGRESS", "PAUL_PROTECTED_TERMS"]
 ok(SWITCHES.every((v) => setup.includes(`ask_toggle ${v}`) || setup.includes(`ask ${v}`)),
-  "setup.sh asks about all three behaviour switches")
+  "setup.sh asks about all five behaviour switches")
 ok(SWITCHES.every((v) => new RegExp(`export ${v}=`).test(setup)),
-  "setup.sh writes all three switches into paul.env")
+  "setup.sh writes all five switches into paul.env")
 ok(/STORED_%s/.test(setup) && !/^\[ -f "\$SECRETS" \] && \. "\$SECRETS"$/m.test(setup) && /EDIT THESE HERE/.test(setup),
   "setup.sh reads paul.env into STORED_* instead of sourcing it over the live variables")
 
@@ -480,6 +482,12 @@ ok([
 ok(/ask_secret\(\) \{ # ask_secret VAR "prompt" \[stored\]/.test(setup) && /Enter to keep/.test(setup),
   "setup.sh: ask_secret prompts with the stored token rather than skipping the question")
 
+// A token containing '/' is never real — it is an environment leftover (e.g. a log path
+// a debugging session left in ATLASSIAN_API_TOKEN) that NONINTERACTIVE mode would
+// otherwise write straight over a working credential with nobody watching.
+ok(/case "\$ATLASSIAN_API_TOKEN" in/.test(setup) && /\*\/\*\)/.test(setup)
+   && /NONINTERACTIVE" = "1" \]; then\s*\n\s*die "ATLASSIAN_API_TOKEN/.test(setup),
+  "setup.sh refuses to write an ATLASSIAN_API_TOKEN containing '/' in NONINTERACTIVE mode — never a real token")
 // setup.sh writes `source paul.env` into the shell rc, so from the second run onwards
 // every answer is already exported. A helper that returns early on that value asks
 // nothing ever again — which left no way to enter a rotated API token.
@@ -511,6 +519,137 @@ ok(reorder.includes("board/$id/configuration") && reorder.includes("board/$id/is
   "reorder_board.sh ranks per board: its own rank field, only the issues actually on it")
 ok(/rankCustomFieldId\\?": %s/.test(reorder) && reorder.includes('f="${f#customfield_}"'),
   "reorder_board.sh sends the numeric rank field id the Agile API expects")
+
+// in_progress reorder scope is opt-in, off by default — reranking a column people are
+// actively working from is more disruptive than todo/backlog and needs its own flag.
+ok(reorder.includes("PAUL_REORDER_INCLUDE_IN_PROGRESS")
+   && /REORDER_STATUSES:-todo backlog/.test(reorder)
+   && !/todo backlog in_progress/.test(reorder),
+  "reorder_board.sh: in_progress is opt-in via PAUL_REORDER_INCLUDE_IN_PROGRESS, not a new default")
+ok(meetings.includes("PAUL_REORDER_INCLUDE_IN_PROGRESS") && meetings.includes("PAUL_REORDER_STATUSES"),
+  "process_meetings.sh forwards the reorder scope switches to reorder_board.sh")
+
+// Board diagnostics: type + configured columns, logged so "why didn't column X move"
+// is answered in the log instead of guessed at. The backlog endpoint is classic-Kanban
+// only — team-managed ("simple") and Scrum boards 400/404 on it — so it must be gated
+// on board type rather than tried unconditionally.
+ok(reorder.includes("board_type()") && reorder.includes("board_columns()")
+   && reorder.includes("board/$id/backlog") && reorder.includes("board_backlog_issue_keys()"),
+  "reorder_board.sh: logs board type + columns, and can union in backlog-only issues")
+ok(reorder.includes("jira_get_optional") && reorder.includes('[ "$code" = "404" ] || [ "$code" = "400" ]'),
+  "reorder_board.sh: a 404 OR 400 from the backlog endpoint (feature disabled) is not a failure — observed as 400 on a real Kanban board with no backlog view")
+ok(/if \[ "\$BTYPE" = "kanban" \]; then\s*\n\s*BOARD_BACKLOG_KEYS=/.test(reorder),
+  "reorder_board.sh: /board/{id}/backlog is only called for kanban-type boards (400s on team-managed/scrum otherwise)")
+
+// Per-status ranking: each selected status is chained independently, so reranking one
+// column's order never depends on, or gets tangled with, another column's chain.
+ok(reorder.includes("keys_for_status") && /rank_chain "\$STATUS_KEYS"/.test(reorder)
+   && /rank_chain "\$SUBSET" "\$FIELD" "board \$BOARD_ID \/ \$STATUS"/.test(reorder),
+  "reorder_board.sh: each REORDER_STATUSES entry is ranked as its own chain (unscoped and per-board)")
+
+// AI mode: the agent decides column mapping + ranking via a plan file this script only
+// applies; JQ mode is the deterministic fallback whenever AI mode is off, unscoped, or
+// the opencode binary / MCP server / prompt file is unavailable — never a hard failure.
+ok(reorder.includes("ai_mode_possible()") && reorder.includes('PAUL_REORDER_AI:-1')
+   && reorder.includes('[ -n "${PAUL_JIRA_BOARDS:-}" ]')
+   && reorder.includes('[ -x "$OPENCODE_BIN" ]'),
+  "reorder_board.sh: AI mode requires a board scope + opencode binary, defaults on otherwise")
+ok(reorder.includes("run_ai_plan_for_board()") && reorder.includes("prompts/reorder_board.md")
+   && reorder.includes("apply_ai_plan()"),
+  "reorder_board.sh: AI mode renders prompts/reorder_board.md per board and applies its plan file")
+ok(/falling back to JQ mode for this board/.test(reorder)
+   && /if \[ "\$AI_MODE" = "1" \]; then/.test(reorder),
+  "reorder_board.sh: a failed AI run for one board falls back to JQ mode for that board, not a hard error")
+ok(reorder.includes('case " $REORDER_STATUSES " in') && /apply_ai_plan\(\) \{[\s\S]*?not in this run's scope/.test(reorder),
+  "reorder_board.sh: apply_ai_plan only ranks columns whose mapped status is in REORDER_STATUSES")
+
+// The AI prompt itself: read-only contract, no rank tool to call (a separate mechanical
+// step applies the plan), and every placeholder the renderer fills in actually exists.
+const reorderPrompt = readFileSync(REPO + "prompts/reorder_board.md", "utf8")
+ok(reorderPrompt.includes("{{MCP_SERVER}}") && reorderPrompt.includes("{{BOARD_ID}}")
+   && reorderPrompt.includes("{{PLAN_FILE_PATH}}") && reorderPrompt.includes("{{REORDER_STATUSES}}")
+   && reorderPrompt.includes("{{SAVED_COLUMN_MAP}}") && reorderPrompt.includes("{{AGENTSMEMORY_TITLE}}")
+   && reorderPrompt.includes("{{CONFLUENCE_SPACE}}"),
+  "prompts/reorder_board.md: every placeholder reorder_board.sh renders is present")
+ok(reorderPrompt.includes("jira_create_issue") === false || /must NOT call any of these/.test(reorderPrompt),
+  "prompts/reorder_board.md: forbidden-tools list is explicit, not just implied")
+ok(reorderPrompt.includes("DERIVE the mapping yourself") && reorderPrompt.includes("STARTING POINT"),
+  "prompts/reorder_board.md: a saved column map is a starting point the AI can override, not a fact")
+
+// setup.sh: the column-map question is asked per selected board, stored base64 like the
+// sub-filters already are, and threaded through every place the other board settings are.
+ok(setup.includes("PAUL_JIRA_BOARD_COLUMN_MAP") && setup.includes("Which PAUL status does each represent"),
+  "setup.sh asks, per selected board, which PAUL status each of its columns represents")
+ok(BOARD_KEYS.concat("PAUL_JIRA_BOARD_COLUMN_MAP").every((v) =>
+  SHIPPED_SCRIPTS.every((p) => readFileSync(REPO + p, "utf8").includes(v))),
+  "PAUL_JIRA_BOARD_COLUMN_MAP is in every script's paul.env keep-list too")
+
+// Dependency-aware, PER-STATUS ordering: an actionable ticket (no unmet TRACKED
+// dependency) must rank above a blocked one within its OWN status, regardless of its
+// own 'order' — and a status's group is entirely independent of another status's group
+// (backlog ordering does not shift because of what's happening in todo, and vice versa).
+// Exercise the actual jq filter reorder_board.sh runs, against a fixture store, rather
+// than re-implementing its logic.
+{
+  const REORDER_JQ_DIR = "/tmp/opencode-paul-verify-reorder"
+  rmSync(REORDER_JQ_DIR, { recursive: true, force: true })
+  mkdirSync(REORDER_JQ_DIR, { recursive: true })
+  const fixture = {
+    entries: [
+      { status: "todo", order: 10, createdAt: "2026-01-01",
+        meta: { externalId: "KAN-1", spec: { dependencies: ["KAN-2"] } } }, // blocked: KAN-2 not done
+      { status: "todo", order: 20, createdAt: "2026-01-01",
+        meta: { externalId: "KAN-2", spec: {} } }, // itself actionable, todo (not done)
+      { status: "todo", order: 30, createdAt: "2026-01-01",
+        meta: { externalId: "KAN-3", spec: { dependencies: ["KAN-9-NOT-TRACKED"] } } }, // untracked dep never blocks
+      { status: "todo", order: 40, createdAt: "2026-01-01",
+        meta: { externalId: "KAN-4", spec: { dependencies: ["KAN-5"] } } }, // not blocked: KAN-5 IS done
+      { status: "done", order: 5, createdAt: "2026-01-01",
+        meta: { externalId: "KAN-5", spec: {} } },
+      // Backlog group: deliberately ordered so a bug that merges groups (instead of
+      // keeping them independent) would interleave these with the todo keys above.
+      { status: "backlog", order: 1, createdAt: "2026-01-01",
+        meta: { externalId: "KAN-20", spec: {} } },
+      { status: "backlog", order: 2, createdAt: "2026-01-01",
+        meta: { externalId: "KAN-21", spec: {} } },
+    ],
+  }
+  const storePath = `${REORDER_JQ_DIR}/memory.json`
+  writeFileSync(storePath, JSON.stringify(fixture))
+  // Mirrors the per-status jq filter in reorder_board.sh: iterate $statuses IN ORDER,
+  // sort actionable-before-blocked within each one, emit "<status>\t<key>" lines.
+  const jqFilter = `
+    (.entries | map(select((.meta.externalId // "") != "")) | map({(.meta.externalId): .status}) | add // {}) as $statusByKey
+    | $statuses[] as $s
+    | ( [ .entries[]
+          | select(.status == $s)
+          | select((.meta.externalId // "") != "")
+          | . + { _blocked: (
+              (.meta.spec.dependencies // []) as $deps
+              | ($deps | map(select(type == "string")))
+              | any( ($statusByKey[.] // null) as $st | $st != null and $st != "done" )
+            ) }
+        ]
+        | sort_by(._blocked, .order, .createdAt)
+        | .[]
+      )
+    | "\\(.status)\\t\\(.meta.externalId)"
+  `
+  const out = execSync(
+    `jq -r --argjson statuses '["todo","backlog"]' '${jqFilter}' "${storePath}"`,
+    { encoding: "utf8" },
+  ).trim().split("\n")
+  const todoKeys = out.filter((l) => l.startsWith("todo\t")).map((l) => l.split("\t")[1])
+  const backlogKeys = out.filter((l) => l.startsWith("backlog\t")).map((l) => l.split("\t")[1])
+  ok(todoKeys.join(",") === "KAN-2,KAN-3,KAN-4,KAN-1",
+    `reorder_board.sh: within 'todo', actionable tickets (KAN-2, KAN-3, KAN-4) rank before ` +
+    `the blocked one (KAN-1) despite its lower 'order' (got: ${todoKeys.join(",")})`)
+  ok(backlogKeys.join(",") === "KAN-20,KAN-21",
+    `reorder_board.sh: 'backlog' is ranked as its own independent group, by its own order ` +
+    `(got: ${backlogKeys.join(",")})`)
+  rmSync(REORDER_JQ_DIR, { recursive: true, force: true })
+}
+
 const renderers = ["scripts/init_from_docs.sh", "scripts/install_command.sh"]
   .map((f) => readFileSync(REPO + f, "utf8"))
 ok(renderers.every((s) => /JIRA_JQL\\\}\\\}/.test(s) && /JIRA_SCOPE\\\}\\\}/.test(s)
@@ -649,6 +788,16 @@ ok(/mcp-atlassian%s/.test(mcpLib) && /"enabled": false/.test(mcpLib),
 ok([initSh, meetings].every((s) => /OPENCODE_CONFIG_CONTENT="\$MCP_OVERLAY"/.test(s)
    && /paul_mcp_key_configured/.test(s) && /exit 4/.test(s)),
   "both pipelines run with the other Atlassian servers disabled, or abort if theirs is missing")
+ok(/paul_mcp_key_configured/.test(reorder) && /lib\/mcp_scope\.sh/.test(reorder)
+   && /ai_mode_possible/.test(reorder),
+  "reorder_board.sh's AI mode also scopes to its own Atlassian server before invoking OpenCode")
+ok(reorder.includes('MCP_OVERLAY="$(paul_mcp_overlay "$MCP_KEY")"')
+   && reorder.includes('OPENCODE_CONFIG_CONTENT="$MCP_OVERLAY"'),
+  "reorder_board.sh's AI mode actually disables the other Atlassian servers on the opencode call, not just names its own")
+ok(reorder.includes("PAUL_REORDER_AI_TIMEOUT:-600") && reorder.includes('timeout -k 10 "${AI_TIMEOUT_SECS}s"'),
+  "reorder_board.sh bounds each AI-mode board decision with a timeout, so a hang or an external kill cannot stall the whole run")
+ok(/rc" -eq 124.*TIMED OUT/s.test(reorder) && /rc" -gt 128.*killed by signal/s.test(reorder),
+  "reorder_board.sh distinguishes timeout vs. killed-by-signal vs. a normal failed exit in the log, instead of one generic 'run failed'")
 ok(/\{\{MCP_SERVER\}\}/.test(readFileSync(REPO + "AGENTS.snippet.md", "utf8"))
    && /gsub\(\/\\\{\\\{MCP_SERVER/.test(setup),
   "the AGENTS.md block names the profile's server, so in-session work uses it too")
