@@ -126,9 +126,16 @@ Confluence — the space "{{CONFLUENCE_SPACE}}":
   title in PHASE 1.
 - Documentation lives in TREES, not in single pages: an arc42 or architecture document is a parent
   page whose real content sits in its children. The page tree already gives you that structure via
-  parent_id and depth — you do not need confluence_get_page_children to rediscover it. A parent page
-  that is only a table of contents is still worth one entry, but the substance is in the subpages,
-  so index each subpage as its own entry with parentId/parentTitle set from the tree.
+  parent_id and depth — you do not need confluence_get_page_children to rediscover it. Index each
+  subpage as its own entry with parentId/parentTitle set from the tree. A PARENT PAGE'S OWN ENTRY IS
+  CONTENT-DEPENDENT, NOT AUTOMATIC: if the parent page itself states something (a real intro
+  paragraph, stated goals/scope, a genuine overview) beyond just linking to its children, it gets
+  one entry summarizing THAT content. If the parent page has nothing of its own — a body that is
+  empty, a placeholder value (e.g. a lone boolean), or text that only names/links its subpages — it
+  is SKIP (see the SKIP bullet below), not a doc entry. The tree structure survives regardless,
+  because every subpage still carries parentId/parentTitle; a content-free parent contributes
+  nothing by getting its own entry, and describing "this page exists to link its children" is
+  Confluence-structure trivia, not project knowledge.
 - The page tree gives you ids and titles, not versions. So on an incremental run, call
   confluence_get_page and compare the version it reports against the `meta.version` of the entry
   with the same externalId from PHASE 1. If they match, the page has not changed since the last
@@ -146,15 +153,21 @@ Confluence — the space "{{CONFLUENCE_SPACE}}":
   * MEETING — notes from a dated event: meeting notes, standup, retro, planning, review.
   * DOC — standing knowledge: architecture or feature spec, decision record, reference, runbook,
     onboarding, process/convention page.
-  * SKIP — templates, empty stubs, personal scratch pages, archived duplicates, a title that
-    matches {{STALE_MARKERS}} on its own (PHASE 3.0 already caught ancestors; this catches a
-    renamed leaf), or a body that OPENS with an explicit deprecation/archival notice — a status
-    macro reading "Deprecated"/"Archived", or a line like "This page is deprecated/superseded
-    by <link>" — even though nothing in the title, folder or labels flagged it. A title/folder/
-    label marker match is SKIP UNCONDITIONALLY — see PHASE 3.0. Content quality, how well
-    referenced a page is, or how much historical value its subpages carry never moves a marker
-    match back to DOC; that judgment does not apply here. Say in your final report which pages
-    you skipped and why, and which of those were caught by content rather than by
+  * SKIP — templates, empty stubs, personal scratch pages, archived duplicates, PURE
+    CONTAINER/NAVIGATION PAGES (a body that is empty, a placeholder value like a lone boolean, or
+    text that only names/links its subpages with nothing stated on its own — see the parent-page
+    rule above; this applies at any depth, not only at tree roots), a title that matches
+    {{STALE_MARKERS}} on its own (PHASE 3.0 already caught ancestors; this catches a renamed leaf),
+    or a body that OPENS with an explicit deprecation/archival notice — a status macro reading
+    "Deprecated"/"Archived", or a line like "This page is deprecated/superseded by <link>" — even
+    though nothing in the title, folder or labels flagged it. A title/folder/label marker match is
+    SKIP UNCONDITIONALLY — see PHASE 3.0. Content quality, how well referenced a page is, or how
+    much historical value its subpages carry never moves a marker match back to DOC; that judgment
+    does not apply here. A SKIPPED PAGE GETS NOTHING WRITTEN ABOUT IT beyond its skipped[] reason
+    (PHASE 4) — no doc entry, no summary sentence, not even a sentence describing what it lacks
+    ("this page has minimal content and serves only as a container" is itself the kind of
+    structural commentary this rule exists to keep out of memory). Say in your final report which
+    pages you skipped and why, and which of those were caught by content rather than by
     title/label/folder.
 - Ignore the AGENTSMEMORY page itself as a source; it is memory, not documentation.
 
@@ -169,14 +182,18 @@ SPLIT THE WORK ACROSS SUBAGENTS, ONE PER TREE:
 - Assign every page to EXACTLY ONE branch, by its primary parent in the tree. A page reachable from
   two branches gets summarized twice otherwise, and the two summaries will not agree.
 - Each subagent inherits nothing from this prompt, so give it: its branch's (already-filtered)
-  page list, the depth rules below, the classification rules including the per-page title check
-  and the content-based deprecation fallback (both from PHASE 3.0/the classification bullet —
-  restate them, since you already excluded folders/labels but a leaf can still self-flag by
-  title or by opening with a deprecation notice), and PHASE 0's read-only contract restated in full.
-  It is bound by that contract exactly as you are. Restate the "mechanical, not a judgment call"
-  rule explicitly too: a subagent that finds a title-marker match with technically rich subpages
-  must SKIP it exactly as PHASE 3.0 requires, not promote it to DOC on its own reasoning about the
-  content's value.
+  page list, the depth rules below, the classification rules including the per-page title check,
+  the content-based deprecation fallback, and the pure container/navigation page rule (all three
+  from PHASE 3.0/the classification bullet — restate them, since you already excluded folders/
+  labels but a leaf can still self-flag by title, by opening with a deprecation notice, or by
+  having no content of its own beyond linking its children), PHASE 4's summary-style rule (atomic
+  facts with the relationships between them, caveman-short, never a description of the page's role
+  in Confluence — restate the banned-phrase list and the good/bad examples verbatim, since a
+  subagent writes the actual doc/meeting entries that land in its output file), and PHASE 0's
+  read-only contract restated in full. It is bound by that contract exactly as you are. Restate the
+  "mechanical, not a judgment call" rule explicitly too: a subagent that finds a title-marker match
+  with technically rich subpages must SKIP it exactly as PHASE 3.0 requires, not promote it to DOC
+  on its own reasoning about the content's value.
 - THE SUBAGENT WRITES ITS RESULT TO A FILE. Never ask it to return the entries in its reply. Give
   it a path — `.paul/init-<branch-id>.json`, beside memory.json — and tell it to write one JSON
   object there: { docs: [...], meetings: [...], skipped: [...] }, same field shapes paul_init
@@ -258,10 +275,35 @@ Jira — the project "{{JIRA_PROJECT}}"{{JIRA_SCOPE}}:
 
 PHASE 4 — SUMMARIZE AND PERSIST (one paul_init call):
 
-Write your own compression, never a copy of the page. For each DOC, the summary answers: what does
-this document establish, what is decided and therefore not up for debate, and what does it leave
-open. For each MEETING: the decisions taken, the action items, and the status of that topic. Two or
-three sentences each — this is what a future session reads instead of the whole space.
+WRITE SUMMARIES AS CAVEMAN-STYLE ATOMIC FACTS WITH THE RELATIONSHIPS BETWEEN THEM, NOT PROSE ABOUT
+THE PAGE. Two failure modes to avoid, both worse than a short summary:
+  1. A narrative description of the page ("this document establishes...", "the page discusses...")
+     — that is a book report, not a fact.
+  2. A bag of disconnected fact-fragments with no link between them — real facts often relate (a
+     decision constrains a later one, a component depends on another, a goal motivates an
+     approach), and dropping that link loses information the page actually states.
+Instead: pull out the substantive facts (decisions, constraints, scope boundaries, terminology,
+technical facts), write each one short and terse — drop articles/filler, keep every technical term
+exact, fragments are fine — and where the page itself connects two facts, say so in one short
+clause instead of omitting it. For each DOC: what does it establish, what is decided and therefore
+not up for debate, what does it leave open, and how do those pieces relate. For each MEETING: the
+decisions taken, the action items, and the status of that topic. Two or three sentences each — this
+is what a future session reads instead of the whole space.
+  BAD (narrative, no facts):  "This document establishes that the system uses X. Additionally, it
+    was decided that the Y approach would be used because Z reasons were considered relevant to
+    the overall architecture."
+  BAD (facts, no relation):  "System uses X. Y approach chosen. Z reasons exist."
+  GOOD (atomic + connected):  "Uses X. Y approach chosen — reason: Z."
+
+NEVER DESCRIBE THE PAGE'S ROLE IN CONFLUENCE. A summary reports facts about the PROJECT, never facts
+about the PAGE AS A CONFLUENCE OBJECT. Banned regardless of how accurately it describes the page:
+"root page", "parent/navigation node", "container for its subpages", "index page", "serves only to
+group/link its children", "thin stub", "body value is just true/a placeholder boolean", or any
+equivalent observation about the page's structural role in the space. This is Confluence-tree
+trivia, not project knowledge, and it is exactly the sentence PHASE 3's SKIP rule for pure
+container/navigation pages exists to keep out of memory entirely — if a page has nothing to say
+about the project once structural commentary is removed, it should not have been classified DOC at
+all; go back and reclassify it SKIP instead of writing a summary that only describes its emptiness.
 
 EVERY FACT IN A SUMMARY COMES FROM THE PAGE YOU READ. You know a great deal about the technologies
 these documents mention; none of it belongs here. Do not add a rationale the page does not give, a

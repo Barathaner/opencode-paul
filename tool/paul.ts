@@ -526,14 +526,16 @@ export const roles = tool({
 // the content; this renderer decides the layout, so every ticket PAUL produces
 // looks the same and carries enough context for someone else to pick it up.
 
-const TICKET_FORMAT_VERSION = 2
+const TICKET_FORMAT_VERSION = 3
 
 const REQUIRED_SPEC_FIELDS = [
   "complexity", "priority", "timeEstimate",
-  "context", "goal", "approach", "acceptanceCriteria", "source",
+  "context", "goal", "approach", "acceptanceCriteria", "source", "background",
 ] as const
 
 const NEEDS_CLARIFICATION = "_Needs clarification — not stated in the meeting._"
+const BACKGROUND_NOT_CHECKED = "_Needs clarification — paul_list(type=\"doc\") was not checked._"
+const BACKGROUND_NONE_FOUND = "_No related PAUL memory found for this ticket._"
 const UNSET = "—"
 
 function isBlank(v: unknown): boolean {
@@ -543,9 +545,20 @@ function isBlank(v: unknown): boolean {
   return false
 }
 
-/** Names of the required spec fields that are still empty. */
+/**
+ * Names of the required spec fields that are still empty.
+ *
+ * `background` is special: it is required in the sense that the caller must
+ * have run the paul_list(type="doc") check, but an explicit `[]` (checked,
+ * nothing genuinely relevant) is a valid, complete answer — not "blank" like
+ * an unset string or array elsewhere. Only `undefined` (never checked) counts
+ * as missing for this one field.
+ */
 function validateSpec(spec: TicketSpec): string[] {
-  return REQUIRED_SPEC_FIELDS.filter((f) => isBlank(spec[f])).map(String)
+  return REQUIRED_SPEC_FIELDS.filter((f) => {
+    if (f === "background") return spec.background === undefined
+    return isBlank(spec[f])
+  }).map(String)
 }
 
 /** Non-empty entries of a list, trimmed. */
@@ -575,15 +588,28 @@ function renderTicketDescription(spec: TicketSpec): string {
 
   out.push("", "## Context", spec.context?.trim() || NEEDS_CLARIFICATION)
 
-  const refs = (spec.background || []).filter((r) => r && !isBlank(r.title) && !isBlank(r.note))
-  if (refs.length) {
-    out.push("", "## Background")
-    for (const r of refs) {
-      const title = r.title.trim()
-      const link = r.url?.trim() ? ` (${r.url.trim()})` : ""
-      out.push(`- ${title}${link} — ${r.note.trim()}`)
+  // Background is always rendered (three states, not two): never checked
+  // (spec.background === undefined) renders a needs-clarification marker like
+  // the other required fields; checked but nothing genuinely relevant
+  // (spec.background === []) renders an explicit "none found" marker; and
+  // actual refs render the list plus the "not a decision" disclaimer. This
+  // keeps "the check happened, and found nothing" visibly distinct from "the
+  // check never happened."
+  out.push("", "## Background")
+  if (spec.background === undefined) {
+    out.push(BACKGROUND_NOT_CHECKED)
+  } else {
+    const refs = spec.background.filter((r) => r && !isBlank(r.title) && !isBlank(r.note))
+    if (refs.length) {
+      for (const r of refs) {
+        const title = r.title.trim()
+        const link = r.url?.trim() ? ` (${r.url.trim()})` : ""
+        out.push(`- ${title}${link} — ${r.note.trim()}`)
+      }
+      out.push("", "_Related memory found by PAUL — background, not a decision unless the reference itself states one._")
+    } else {
+      out.push(BACKGROUND_NONE_FOUND)
     }
-    out.push("", "_Related memory found by PAUL — background, not a decision unless the reference itself states one._")
   }
 
   out.push("", "## Goal", spec.goal?.trim() || NEEDS_CLARIFICATION)
@@ -619,9 +645,16 @@ function renderTicketDescription(spec: TicketSpec): string {
 /** Collect the spec fields out of a looser arg/ticket object, dropping empties. */
 function specFrom(src: Record<string, unknown>): TicketSpec | undefined {
   const spec: Record<string, unknown> = {}
-  for (const k of ["complexity", "priority", "timeEstimate", "context", "background", "goal",
+  for (const k of ["complexity", "priority", "timeEstimate", "context", "goal",
                    "approach", "acceptanceCriteria", "outOfScope", "dependencies", "source", "derived"]) {
     if (!isBlank(src[k])) spec[k] = src[k]
+  }
+  // background is kept whenever the key was passed at all — including an
+  // explicit [] meaning "checked, nothing relevant" — since that is distinct
+  // from never having checked (key absent). Everything else above treats
+  // [] and "not present" the same; background must not.
+  if (Object.prototype.hasOwnProperty.call(src, "background") && Array.isArray(src.background)) {
+    spec.background = src.background
   }
   if (!Object.keys(spec).length) return undefined
   return { ...spec, specVersion: TICKET_FORMAT_VERSION } as TicketSpec
@@ -632,10 +665,13 @@ const BACKGROUND_ARG = S.array(S.object({
   url: S.string().optional().describe("Link to the reference, when known"),
   note: S.string().describe("One clause: why this reference is relevant to the ticket"),
 })).optional().describe(
-  "Optional: at most 3 related docs/entries found in PAUL memory (via paul_list) that give " +
-  "background for this ticket — e.g. an ADR or architecture doc covering the same area. " +
-  "Background, not a decision, unless the reference itself states one. Omit if nothing found; " +
-  "never invent a reference.")
+  "REQUIRED CHECK, not optional content: call paul_list(type=\"doc\") for every ticket and pass " +
+  "at most 3 genuine topical matches as {title, url, note} — background for this ticket, e.g. an " +
+  "ADR or architecture doc covering the same area. Background, not a decision, unless the " +
+  "reference itself states one. If nothing is genuinely relevant, pass an explicit empty array " +
+  "[] — that means 'checked, nothing found', which is required and different from omitting the " +
+  "field entirely (which means 'never checked' and will be flagged in missing[]). Never invent a " +
+  "reference just to fill it.")
 
 const SPEC_ARGS = {
   complexity: S.string().optional().describe("Implementation effort/uncertainty: Low | Medium | High"),
@@ -663,10 +699,13 @@ export const ticket_body = tool({
     "report which required fields are still missing. Call this for EVERY Jira issue you create or update " +
     "and pass the returned 'description' VERBATIM to jira create_issue / update_issue — never hand-write " +
     "a description, so every ticket has the same shape. Required: complexity, priority, timeEstimate, " +
-    "context, goal, approach, acceptanceCriteria, source. If the meeting did not state the approach or the " +
-    "acceptance criteria, think the task through and DERIVE them (a numbered plan someone could follow), " +
-    "then list what you derived in derived[] so the body marks it as proposed. Pass entryId to also store " +
-    "the structured spec on that PAUL entry's meta.spec.",
+    "context, goal, approach, acceptanceCriteria, source, background. If the meeting did not state the " +
+    "approach or the acceptance criteria, think the task through and DERIVE them (a numbered plan someone " +
+    "could follow), then list what you derived in derived[] so the body marks it as proposed. Before " +
+    "calling this, call paul_list(type=\"doc\") and pass background as at most 3 genuine matches, or an " +
+    "explicit [] if none are relevant — omitting background entirely means the check was skipped and " +
+    "will be flagged in missing[]. Pass entryId to also store the structured spec on that PAUL entry's " +
+    "meta.spec.",
   args: {
     ...SPEC_ARGS,
     title: S.string().optional().describe("Ticket summary; not part of the body, stored with the spec"),

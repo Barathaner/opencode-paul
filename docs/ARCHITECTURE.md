@@ -40,8 +40,10 @@ instead of free-form prose. Concretely:
     path (see [`docs/ROLES.md`](./ROLES.md)), not by asking the model nicely.
   - The ticket format is rendered by one function, `renderTicketDescription`, not hand-written by
     the model each time (see [`docs/TICKET_FORMAT.md`](./TICKET_FORMAT.md)) — including the
-    `background` field, which pulls related context from memory already loaded rather than a
-    fresh search, so richer tickets do not mean a slower or less predictable run.
+    `background` field, which is a required check every ticket must run against memory already
+    loaded (never a fresh search), rendering distinctly whether it found real matches, checked and
+    found none, or was never checked at all — so richer tickets do not mean a slower run, and a
+    skipped check does not silently look the same as a genuine "nothing relevant" finding.
 - **Optional two-way sync** (the `AGENTSMEMORY` Confluence page) makes the memory shareable across
   machines and teammates without a hosted service — a human-readable summary plus a hidden,
   lossless JSON block.

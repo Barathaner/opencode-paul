@@ -43,8 +43,12 @@ fresh shells work unchanged. Anything already exported in your shell still wins 
 **Documentation lives in trees.** An arc42 or architecture document is usually a thin parent page
 whose real content is in its children, and theirs. `confluence_get_space_page_tree` returns the whole
 hierarchy in one call — id, title, `parent_id`, depth — so each subpage is indexed as its own entry
-with `parentId`/`parentTitle` in `meta` and the tree stays navigable in memory. A parent page that is
-only a table of contents still gets one entry.
+with `parentId`/`parentTitle` in `meta` and the tree stays navigable in memory. A parent page's own
+entry is content-dependent, not automatic: it gets one entry only if it states something itself (a
+real intro, stated goals/scope) beyond linking its children. A parent with nothing of its own —
+empty body, a placeholder value, or text that only names/links subpages — is `SKIP` (see "Stale and
+legacy documentation" below for the sibling rule at any depth, not just tree roots). The tree
+structure survives regardless, since every subpage still carries `parentId`/`parentTitle`.
 
 **Two pagination traps the protocol has to steer around.** `confluence_search` has no offset
 parameter, so it cannot page a space at all — it is used only to find the `AGENTSMEMORY` page by
@@ -57,9 +61,28 @@ with `next_page_token` → `page_token`, and stops when the token is gone. A run
 `backlog`/`todo`/`in_progress` — the ones that get a spec. Everything else is summarized from the
 fields the search already returned, which is one round trip per 100 issues instead of per issue.
 
-Summaries are the agent's own compression — what the document establishes, what is decided, what is
-still open — never a copy of the page. That is the whole point: a future session reads three
-sentences instead of the whole space.
+**Summaries are atomic facts with the relationships between them, caveman-short — never a
+description of the page.** The protocol names two failure modes and rules both out: a narrative
+book-report about the page ("this document establishes...", "the page discusses...") and a bag of
+disconnected fact-fragments that drops the relationships the page actually states (a decision that
+constrains a later one, a component that depends on another). The instruction gives a worked
+example:
+
+- Bad (narrative): "This document establishes that the system uses X. Additionally, it was decided
+  that the Y approach would be used because Z reasons were considered relevant..."
+- Bad (facts, no relation): "System uses X. Y approach chosen. Z reasons exist."
+- Good: "Uses X. Y approach chosen — reason: Z."
+
+Every fact still comes from the page, never the agent's own knowledge of the technologies
+mentioned — that guarantee is unchanged.
+
+**Confluence's own structure about a page is never a fact about the project**, and is explicitly
+banned from summaries: "root page", "parent/navigation node", "container for its subpages", "index
+page", "serves only to group/link its children", "thin stub", "body value is just true/a
+placeholder boolean" — these describe the page's role in the Confluence tree, not anything about
+the project, and are exactly what PHASE 3's container/navigation SKIP rule exists to keep out of
+memory. If nothing survives once structural commentary is removed, the page should not have been
+classified `DOC` at all — see "Stale and legacy documentation" below.
 
 On the `AGENTSMEMORY` page those summaries are rendered the way the space is shaped: a
 **Documentation** section where each tree's root is a heading and its subpages nest beneath it,
@@ -201,6 +224,23 @@ To match a different convention (e.g. a label like `zzz-old` instead of `archive
 `PAUL_STALE_MARKERS` / `PAUL_STALE_LABELS` before running `setup.sh`, or edit them directly in
 `~/.config/opencode/paul.env` afterwards — both are read by `init_from_docs.sh` and
 `install_command.sh`, so the CLI run and `/paul-init-docs` stay in agreement.
+
+## Empty and pure-navigation pages are skipped, not summarized as empty
+
+Separate from staleness above: a page can be perfectly current and still have nothing of its own to
+say — an arc42/architecture root whose body is a placeholder value or that only names/links its
+subpages, at any depth, not only at tree roots. The protocol classifies these `SKIP`, the same
+bucket as templates and scratch pages, and a `SKIP` page gets **nothing** written about it beyond
+its one-line `skipped[]` reason — no doc entry, and critically, no summary sentence describing what
+it lacks either. "This page has minimal content and serves only as a container for its subpages" is
+itself the kind of sentence this rule exists to keep out of memory: it is true, and it is
+Confluence-tree trivia rather than a fact about the project. If a page states even a short
+intro/goals paragraph beyond linking its children, it still earns one entry — the bar is "does the
+page say something," not "is it long."
+
+This is why summaries never describe a page's structural role (see "Summaries are atomic facts..."
+above): a page with real content gets a summary of that content; a page with no content is skipped
+outright, so there is never a case where the honest thing to write is "this page is a container."
 
 ## Re-running is the normal case
 

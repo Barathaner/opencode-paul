@@ -57,7 +57,7 @@ returned `description` verbatim to `jira create_issue` / `jira update_issue`.
 | `priority` | yes | Low \| Medium \| High \| Critical — business urgency |
 | `timeEstimate` | yes | Jira-style, e.g. 2h, 1d, 3d |
 | `context` | yes | why this exists — background/facts from the meeting |
-| `background` | no | at most 3 `{title, url, note}` refs to related docs found via `paul_list(type="doc")` — genuine topical matches only, never forced |
+| `background` | yes | at most 3 `{title, url, note}` refs to related docs found via `paul_list(type="doc")` — genuine topical matches only, never forced. The check is required every time: pass an explicit `[]` when nothing relevant is found; omitting the field entirely means the check was skipped and is flagged in `missing` |
 | `goal` | yes | one sentence: what "done" means |
 | `approach` | yes | numbered plan, one bounded action per step |
 | `acceptanceCriteria` | yes | 2–5 checkable outcomes, rendered as checkboxes |

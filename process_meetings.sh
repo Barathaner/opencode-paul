@@ -279,8 +279,9 @@ PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PA
 - Extract every action item from the transcript.
 - Call paul_list(type="doc") ONCE for this whole phase (already local — synced from AGENTSMEMORY
   in PHASE 0, no extra Confluence call). This is the standing knowledge (specs/ADRs/architecture
-  docs) already in memory. If it returns no entries, background stays empty for every ticket below
-  and you proceed exactly as before — do not search Confluence for this, do not call confluence_search.
+  docs) already in memory. If it returns no entries, pass background: [] for every ticket below
+  (explicitly checked, nothing to match against) — do not search Confluence for this, do not call
+  confluence_search.
 - For EACH action item build a TICKET SPEC. Every ticket uses the same standard format —
   you decide the content, paul_ticket_body decides the layout. Fields:
   * complexity:         Low | Medium | High (implementation effort / uncertainty).
@@ -288,14 +289,16 @@ PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PA
   * timeEstimate:       Jira-style string, e.g. "2h", "1d", "3d".
   * context:            why this exists — the background and facts from the transcript.
                         Name people by ROLE only, e.g. "the Backend Developer raised this".
-  * background:         optional, at most 3 entries. Scan the paul_list(type="doc") titles/summaries
+  * background:         REQUIRED CHECK, at most 3 entries. Scan the paul_list(type="doc") titles/summaries
                         from the step above for genuine topical overlap with THIS action item (same
                         subsystem, same component, same ADR area) — not a keyword coincidence. For
                         each real match add { title, url, note } where note is one clause on why it
-                        is relevant. If nothing is genuinely relevant, leave this empty — never force
-                        a reference just to fill the field. These are background, not decisions: if a
-                        matched doc fixes a real constraint (e.g. an ADR), say so in the note, but do
-                        not treat an unrelated doc as authoritative just because it exists.
+                        is relevant. If nothing is genuinely relevant, pass an EXPLICIT EMPTY ARRAY []
+                        — never force a reference just to fill the field, and never omit the field
+                        entirely (omitting it means "never checked" and paul_ticket_body will flag it
+                        in missing[]). These are background, not decisions: if a matched doc fixes a
+                        real constraint (e.g. an ADR), say so in the note, but do not treat an
+                        unrelated doc as authoritative just because it exists.
   * goal:               ONE sentence describing what "done" means.
   * approach:           a NUMBERED PLAN of concrete steps that solve the task — the same
                         way you would plan the work yourself before starting it. Each step

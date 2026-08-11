@@ -219,7 +219,7 @@ const FULL_SPEC = {
   approach: ["Reproduce the 500.", "Fix the callback."],
   acceptanceCriteria: ["Callback returns a session", "Fallback removed"],
   outOfScope: "SCIM provisioning.", dependencies: ["KAN-12", "KAN-13"],
-  source: "Meeting Notes: 2026-08-10 (url)",
+  source: "Meeting Notes: 2026-08-10 (url)", background: [],
 }
 const render = async (spec, c = ctx) => J(await P.ticket_body.execute(spec, c))
 
@@ -242,11 +242,20 @@ const notDerived = await render(FULL_SPEC)
 ok(!notDerived.description.includes(derivedNote),
   "ticket_body: no proposed note when approach was not derived")
 
-const lean = await render({ ...FULL_SPEC, outOfScope: "", dependencies: [] })
+const lean = await render({ ...FULL_SPEC, outOfScope: "", dependencies: [], background: [] })
 ok(!lean.description.includes("## Out of scope") && !lean.description.includes("## Dependencies"),
   "ticket_body: empty optional sections are omitted entirely")
-ok(!lean.description.includes("## Background"),
-  "ticket_body: no background section when background is empty/omitted")
+ok(lean.description.includes("## Background") && lean.description.includes("_No related PAUL memory found for this ticket._"),
+  "ticket_body: explicit empty background renders the 'no related memory' marker, not omitted")
+ok(!lean.missing.includes("background"),
+  "ticket_body: explicit empty background ([]) satisfies the required check")
+
+const { background: _omit, ...FULL_SPEC_NO_BG } = FULL_SPEC
+const noBgCheck = await render(FULL_SPEC_NO_BG)
+ok(noBgCheck.missing.includes("background"),
+  "ticket_body: omitting background entirely is flagged as missing (never checked)")
+ok(noBgCheck.description.includes('_Needs clarification — paul_list(type="doc") was not checked._'),
+  "ticket_body: omitted background renders a distinct 'not checked' marker")
 
 const withBg = await render({ ...FULL_SPEC, background: [
   { title: "ADR-010: Encryption vs Mapping Table", url: "https://x/wiki/1", note: "same auth-boundary area" },
@@ -266,10 +275,10 @@ ok(withBg.description.includes("_Related memory found by PAUL"),
 
 const sparse = await render({ complexity: "Low", priority: "Low", timeEstimate: "2h",
   context: "c", goal: "g", source: "s" })
-ok(sparse.missing.join(",") === "approach,acceptanceCriteria",
+ok(sparse.missing.join(",") === "approach,acceptanceCriteria,background",
   `ticket_body: reports exactly the empty required fields (got ${sparse.missing.join(",")})`)
-ok((sparse.description.match(/_Needs clarification/g) || []).length === 2,
-  "ticket_body: empty required fields render a needs-clarification marker")
+ok((sparse.description.match(/_Needs clarification/g) || []).length === 3,
+  "ticket_body: empty required fields (including unchecked background) render a needs-clarification marker")
 
 // entryId persists the structured spec onto an entry (own store — keeps DIR counts stable).
 const DIR3 = "/tmp/opencode-paul-verify3"
@@ -278,7 +287,7 @@ const ctx3 = { worktree: DIR3, directory: DIR3 }
 const target = J(await P.add.execute({ type: "ticket", title: "T" }, ctx3)).added
 await P.ticket_body.execute({ ...FULL_SPEC, entryId: target.id }, ctx3)
 const stored = J(readFileSync(DIR3 + "/.paul/memory.json", "utf8")).entries[0].meta.spec
-ok(stored.goal === FULL_SPEC.goal && stored.approach.length === 2 && stored.specVersion === 2,
+ok(stored.goal === FULL_SPEC.goal && stored.approach.length === 2 && stored.specVersion === 3,
   "ticket_body: entryId persists the spec to meta.spec")
 ok(J(await P.ticket_body.execute({ goal: "g", entryId: "nope" }, ctx3)).error !== undefined,
   "ticket_body: unknown entryId reports an error")
@@ -419,6 +428,22 @@ ok(prompt.includes("paul_init") && prompt.includes("docs:") && prompt.includes("
   "init_from_docs: prompt persists via paul_init docs[] and takes the page tree in one call")
 ok(["{{CONFLUENCE_SPACE}}", "{{JIRA_PROJECT}}", "{{AGENTSMEMORY_TITLE}}", "{{MODE}}", "{{JIRA_EXPECTED}}"]
   .every((p) => prompt.includes(p)), "init_from_docs: all placeholders present for the renderers")
+
+// Empty/pure-navigation pages must be SKIP, not a doc entry, and summaries must never describe a
+// page's structural role in Confluence — both regressions a real run hit once (see docs).
+ok(prompt.includes("CONTENT-DEPENDENT, NOT AUTOMATIC") &&
+    prompt.toLowerCase().includes("container/navigation pages") &&
+    prompt.includes("A SKIPPED PAGE GETS NOTHING WRITTEN ABOUT IT"),
+  "init_from_docs: parent-page entry is content-dependent, and a SKIPped page gets nothing written")
+ok(prompt.includes("NEVER DESCRIBE THE PAGE'S ROLE IN CONFLUENCE"),
+  "init_from_docs: summaries are explicitly forbidden from describing Confluence structure")
+const BANNED_STRUCTURAL_PHRASES = ["root page", "parent/navigation node", "container for its subpages",
+  "index page", "thin stub"]
+ok(BANNED_STRUCTURAL_PHRASES.every((p) => prompt.includes(p)),
+  "init_from_docs: the banned-structural-phrase list is spelled out, not left to inference")
+ok(prompt.includes("ATOMIC FACTS WITH THE RELATIONSHIPS BETWEEN THEM") &&
+    prompt.includes("Uses X. Y approach chosen — reason: Z."),
+  "init_from_docs: summary style mandates atomic facts plus their relationships, with a worked example")
 
 const canRun = (p) => { try { accessSync(REPO + p, constants.X_OK); return true } catch { return false } }
 ok(canRun("scripts/init_from_docs.sh"), "init_from_docs.sh: present and executable")
