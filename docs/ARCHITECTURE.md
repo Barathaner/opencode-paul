@@ -1,5 +1,7 @@
 # Architecture
 
+> **PAUL** = **P**ersistent (memory), **A**tlassian, **U**nderstanding, (**meeting**) **L**ogger.
+
 ## Problem / solution fit
 
 **Problem.** An agent given project-management work — ordering tickets on a Kanban board,

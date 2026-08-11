@@ -1,8 +1,10 @@
 # opencode-paul
 
-**PAUL** is structured, per-project **agent memory** for [OpenCode](https://opencode.ai) —
-roadmap / Kanban state the agent can list, order, and keep truthful across sessions, with
-optional two-way sync to Jira & Confluence.
+**PAUL** — **P**ersistent (**memory**), **A**tlassian, **U**nderstanding, (**meeting**) **L**ogger.
+
+Structured per-project agent memory for [OpenCode](https://opencode.ai): turn meeting
+transcripts into Jira tickets, keep roadmap / Kanban state truthful across sessions,
+and sync both ways with Jira & Confluence.
 
 Instead of letting the agent scribble roadmap notes into prose (which drift and corrupt),
 PAUL gives it real verbs backed by an atomic per-project JSON store at

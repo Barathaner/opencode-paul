@@ -1,16 +1,20 @@
 {
   "name": "opencode-paul",
   "version": "0.1.0",
-  "description": "PAUL — structured, per-project agent memory for OpenCode. Roadmap/Kanban state the agent can list, order, and keep in sync with Jira & Confluence.",
+  "description": "PAUL — Persistent Atlassian Understanding Logger: structured agent memory that turns meeting transcripts into Jira tickets and keeps roadmap/kanban state in sync with Jira & Confluence.",
   "keywords": [
     "opencode",
     "opencode-plugin",
     "agent-memory",
+    "meeting-logger",
+    "transcript",
+    "meeting-minutes",
     "roadmap",
     "kanban",
     "jira",
     "confluence",
-    "atlassian"
+    "atlassian",
+    "agile"
   ],
   "license": "MIT",
   "author": "Karl-Augustin Jahnel",

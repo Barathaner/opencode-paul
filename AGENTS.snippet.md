@@ -1,10 +1,10 @@
 <!-- {{PROFILE_MARKER}}:start -->
-# PAUL — Project Memory (structured, per-project)
+# PAUL — Persistent Atlassian Understanding Logger (project memory)
 
-For project-management / roadmap work (PAUL: ordering tickets on Kanban boards,
-tracking where the project is on its roadmap), use the PAUL memory tools instead
-of prose notes. The store is per-project at `<project-root>/.paul/memory.json`
-and persists across sessions automatically.
+PAUL is structured, per-project agent memory. Persistent across sessions; Atlassian-native
+(Jira + Confluence); understands meetings and turns action items into tickets; logs the
+roadmap position. Use the PAUL tools instead of prose notes. The store is per-project at
+`<project-root>/.paul/memory.json` and persists across sessions automatically.
 
 ## Tools
 - `paul_list`   — read entries (roadmap items, epics, tickets, milestones, blockers),
