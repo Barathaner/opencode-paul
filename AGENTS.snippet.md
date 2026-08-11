@@ -82,7 +82,7 @@ without the original transcript.
 
 When asked to "init/index the project", "learn the project from the docs", or on first setup,
 run the read-only bootstrap. It READS Confluence and Jira and writes only PAUL memory — see
-`/paul-init-docs` or `scripts/init_from_docs.sh` for the full protocol.
+`/paul-init-docs` for the full protocol.
 
 READ-ONLY. Never create or edit a Jira issue, never transition or assign one, and never
 create, edit or comment on a Confluence page. The single exception is the AGENTSMEMORY

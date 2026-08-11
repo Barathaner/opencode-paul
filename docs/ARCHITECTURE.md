@@ -1,5 +1,10 @@
 # Architecture
 
+> **Note:** The driver scripts described below (`.sh`) have been ported to TypeScript.
+> The entrypoints are now `paul-meetings`, `paul-init-docs`, and `paul-reorder` (npm bins
+> in `src/cli/`). The diagrams show the original design with bash labels and remain
+> accurate for understanding the data flow — the TS ports follow the same protocol.
+
 ## Problem / solution fit
 
 **Problem.** An agent given project-management work — ordering tickets on a Kanban board,

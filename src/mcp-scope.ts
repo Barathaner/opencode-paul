@@ -2,15 +2,18 @@ import { readFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 
-const CONFIG_PATH = join(
-  process.env.OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode"),
-  "opencode.json",
-)
+function configPath(): string {
+  return join(
+    process.env.OPENCODE_CONFIG_DIR || join(homedir(), ".config", "opencode"),
+    "opencode.json",
+  )
+}
 
 function loadOpenCodeConfig(): Record<string, unknown> | null {
-  if (!existsSync(CONFIG_PATH)) return null
+  const path = configPath()
+  if (!existsSync(path)) return null
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Record<string, unknown>
+    return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>
   } catch {
     return null
   }

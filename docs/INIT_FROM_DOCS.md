@@ -4,21 +4,21 @@ PAUL is only useful once it knows the project. If your team already has a Conflu
 of specs and a Jira board full of issues, you should not have to wait for the next meeting for
 PAUL to catch up — it can read what exists and learn from that.
 
-This is what `scripts/init_from_docs.sh` and the `/paul-init-docs` command do. Both drive the
+This is what `paul-init-docs` and the `/paul-init-docs` command do. Both drive the
 same protocol, which lives in one file: [`prompts/init_from_docs.md`](../prompts/init_from_docs.md)
 (the template — rendered by [`src/prompts/init-from-docs.ts`](../src/prompts/init-from-docs.ts)).
 See [`ARCHITECTURE.md`](./ARCHITECTURE.md#sequence-diagram--scriptsinit_from_docssh) for a
 phase-by-phase sequence diagram of this run.
 
 ```bash
-./scripts/init_from_docs.sh                 # incremental index — safe to repeat
-./scripts/init_from_docs.sh --reset         # wipe memory, index from scratch
-./scripts/init_from_docs.sh --count         # how much is in scope — index nothing
-./scripts/init_from_docs.sh --dry-run       # print the prompt, call nothing
-./scripts/init_from_docs.sh --space DOCS --project ENG
-./scripts/init_from_docs.sh --board 12,21   # only what those boards show
-./scripts/init_from_docs.sh --no-board      # the whole project, ignoring the config
-./scripts/init_from_docs.sh --full-filter   # each board's whole saved filter
+paul-init-docs                 # incremental index — safe to repeat
+paul-init-docs --reset         # wipe memory, index from scratch
+paul-init-docs --count         # how much is in scope — index nothing
+paul-init-docs --dry-run       # print the prompt, call nothing
+paul-init-docs --space DOCS --project ENG
+paul-init-docs --board 12,21   # only what those boards show
+paul-init-docs --no-board      # the whole project, ignoring the config
+paul-init-docs --full-filter   # each board's whole saved filter
 ```
 
 Start with `--count`. It prints the number of Jira issues and Confluence pages the run would read,
@@ -26,7 +26,7 @@ in a second or two, which is the cheapest way to notice that the scope is not wh
 
 Or, inside an OpenCode session, `/paul-init-docs` (installed by `setup.sh`; `reset` and an
 alternate space/project key can be passed as arguments). The command bakes in your space and project
-key at install time — after changing either, regenerate it with `./scripts/install_command.sh`,
+key at install time — after changing either, regenerate it with `setup.sh` (which regenerates the `/paul-init-docs` slash command),
 which renders the same prompt into `~/.config/opencode/command/paul-init-docs.md`.
 
 No `source` step is needed: the script loads `~/.config/opencode/paul.env` itself, so cron jobs and
@@ -101,7 +101,7 @@ Never touches:
 
 - Any Jira issue. Nothing is created, updated, transitioned, assigned, commented on or ranked.
   The board `order` this run computes lives in PAUL memory only — that is why, unlike
-  `process_meetings.sh`, this entrypoint does not call `scripts/reorder_board.sh`.
+  `paul-meetings`, this entrypoint does not call `paul-reorder`.
 - Any Confluence page other than `AGENTSMEMORY`. No tidying, no labels, no comments.
 - Action items found in old documents. Reading is not deciding: somebody already chose what
   became a ticket, and re-deciding that from a two-year-old page is how a board fills with noise.
@@ -152,7 +152,7 @@ about it:
 
 ```bash
 # see the last init's own report, not something read back out of memory.json
-./scripts/init_from_docs.sh  # coverage gaps, if any, print in its own output
+paul-init-docs  # coverage gaps, if any, print in its own output
 ```
 
 **Where `jiraExpected` comes from.** Newer Jira Cloud returns `total: -1` from the search API rather
@@ -223,8 +223,8 @@ reads as intentional.
 
 To match a different convention (e.g. a label like `zzz-old` instead of `archived`), set
 `PAUL_STALE_MARKERS` / `PAUL_STALE_LABELS` before running `setup.sh`, or edit them directly in
-`~/.config/opencode/paul.env` afterwards — both are read by `init_from_docs.sh` and
-`install_command.sh`, so the CLI run and `/paul-init-docs` stay in agreement.
+`~/.config/opencode/paul.env` afterwards — both are read by `paul-init-docs` and
+`setup.sh`, so the CLI run and `/paul-init-docs` stay in agreement.
 
 ## Empty and pure-navigation pages are skipped, not summarized as empty
 
@@ -316,12 +316,12 @@ whatever the run does not re-send is gone.
 A weekly refresh via cron:
 
 ```cron
-0 6 * * 1 /path/to/opencode-paul/scripts/init_from_docs.sh
+0 6 * * 1 /path/to/opencode-paupaul-init-docs
 ```
 
 ## Configuration
 
-The script reads the same environment as `process_meetings.sh`, all of it written to
+The script reads the same environment as `paul-meetings`, all of it written to
 `~/.config/opencode/paul.env` by `setup.sh`:
 
 | Variable | Default | Meaning |

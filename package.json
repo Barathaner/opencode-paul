@@ -34,13 +34,17 @@
     "docs/",
     "examples/",
     "setup.sh",
-    "process_meetings.sh",
     "AGENTS.snippet.md",
     "README.md",
     "LICENSE",
     "tsconfig.json",
     "package.json"
   ],
+  "bin": {
+    "paul-meetings": "node --experimental-strip-types src/cli/process-meetings.ts",
+    "paul-init-docs": "node --experimental-strip-types src/cli/init-from-docs.ts",
+    "paul-reorder": "node --experimental-strip-types src/cli/reorder-board.ts"
+  },
   "scripts": {
     "test": "node --test --experimental-strip-types scripts/verify.mjs && node --test --experimental-strip-types test/*.test.ts",
     "test:smoke": "node --test --experimental-strip-types test/smoke.test.ts"

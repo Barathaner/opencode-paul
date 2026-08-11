@@ -29,7 +29,7 @@ exported Confluence body and the created Jira issues returns nothing.
 
 This is the one file that still holds real names, so:
 
-- **gitignore it.** `process_meetings.sh` adds `.paul/roster.local.json` to the project's
+- **gitignore it.** `paul-meetings` adds `.paul/roster.local.json` to the project's
   `.gitignore` automatically. If you use PAUL in your own repo, add that line yourself.
 - It is never rendered into the AGENTSMEMORY page and never merged by `paul_import_page`.
 
@@ -53,7 +53,7 @@ Built-in defaults:
 Override with a comma-separated `PAUL_ROLES`:
 
 ```bash
-PAUL_ROLES="Product Owner,Tech Lead,Backend Developer,QA Engineer" ./process_meetings.sh notes.json
+PAUL_ROLES="Product Owner,Tech Lead,Backend Developer,QA Engineer" paul-meetings notes.json
 ```
 
 A role only counts if it is in the vocabulary. Anyone who does not fit gets a stable
@@ -93,7 +93,7 @@ German `Karls Idee`. Lowercase words that happen to match a short name — `mark
 person called Mark — are left alone.
 
 **What it does not catch:** a name nobody registered. The scrub is a safety net under the agent's
-own discipline, not a replacement for it — which is why `process_meetings.sh` makes registering
+own discipline, not a replacement for it — which is why `paul-meetings` makes registering
 people PHASE 0.5, before anything is written.
 
 ## Protected terms
@@ -114,7 +114,7 @@ specific phrase always wins over a bare first name:
 by default. Add your own product and vendor names:
 
 ```bash
-PAUL_PROTECTED_TERMS="Carl Zeiss,ACME Payments,Iris" ./process_meetings.sh notes.json
+PAUL_PROTECTED_TERMS="Carl Zeiss,ACME Payments,Iris" paul-meetings notes.json
 ```
 
 `setup.sh` asks for these and stores them in `~/.config/opencode/paul.env`, which every PAUL script
