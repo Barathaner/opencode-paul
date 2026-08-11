@@ -616,6 +616,100 @@ per-module smoke tests live in [`test/`](./test/) using `node:test`.
 - A board scope that cannot be resolved is a hard error, and so is an unknown `PAUL_PROFILE`.
   Neither falls back to something broader; that fallback is what points a run at the wrong tickets.
 
+## Tested / recommended setup
+
+The exact OpenCode setup this repository is developed and tested against. Every plugin, MCP
+server, skill and tool below is running in the author's daily driver — copy it wholesale and you
+get the same stack, down to the model.
+
+### Model
+
+`deepseek/deepseek-v4-flash` ("DeepSeek V4 Flash") via the DeepSeek provider, keyed from the
+environment (`{env:DEEPSEEK_API_KEY}`, exported from `~/.config/opencode/deepseek.env`):
+
+```json
+{
+  "model": "deepseek/deepseek-v4-flash",
+  "provider": {
+    "deepseek": {
+      "options": { "apiKey": "{env:DEEPSEEK_API_KEY}" },
+      "models": { "deepseek-v4-flash": { "name": "DeepSeek V4 Flash" } }
+    }
+  }
+}
+```
+
+### Plugins (`~/.config/opencode/opencode.json`)
+
+| Plugin | Version | What it does |
+|--------|---------|--------------|
+| `./plugins/caveman/plugin.js` | 0.1.0 | Terse-response mode tracker + `/caveman*` slash commands (mode on by default). |
+| `context-mode` | 1.0.169 | Sandbox + knowledge base — `ctx_*` tools (execute, search, index, fetch) that keep raw bytes out of context. |
+| `opencode-mem0-selfhost` | 0.1.7 | Persistent AI memory against the self-hosted Mem0 REST backend at `http://localhost:8888` (no cloud SDK, no telemetry). |
+| `opencode-paul` | 0.1.0 | **This repo** — the eleven `paul_*` tools (Jira/Confluence project memory). |
+| `./plugins/rtk.ts` | 0.45.0 | Command proxy — auto-rewrites `bash` calls through `rtk` to filter output before it reaches the model. |
+
+### MCP servers
+
+| Server | Status | Command | Backend |
+|--------|--------|---------|---------|
+| `codebase-memory-mcp` | enabled | `codebase-memory-mcp` (0.9.0) | local code-knowledge graph, per-repo indexes |
+| `firecrawl` | enabled | `npx -y firecrawl-mcp` | self-hosted Firecrawl at `http://localhost:3002` |
+| `mcp-atlassian-robo` | enabled | `uvx mcp-atlassian` | Jira + Confluence (robofootball.atlassian.net) |
+| `mcp-atlassian` | disabled | `uvx mcp-atlassian` | personal tenant (karl-augustin-jahnel.atlassian.net) |
+| `mcp-atlassian-test` | disabled | `uvx mcp-atlassian` | same personal tenant, test token |
+
+Atlassian tokens are referenced as `{env:ATLASSIAN_API_TOKEN*}`, never inline. Only one
+Atlassian server is enabled at a time so a session can never read/decide against the wrong site.
+
+### Skills
+
+- **caveman family** — `caveman`, `caveman-commit`, `caveman-compress`, `caveman-help`,
+  `caveman-review`, `caveman-stats`.
+- **firecrawl family** (symlinked from `~/.agents/skills/`) — ~30 skills: `firecrawl`, `firecrawl-search`,
+  `firecrawl-scrape`, `firecrawl-crawl`, `firecrawl-map`, `firecrawl-agent`, `firecrawl-deep-research`,
+  `firecrawl-developer-index`, `firecrawl-monitor`, `firecrawl-parse`, `firecrawl-qa`, and more.
+- **mem0 family** — `mem0` (SDK), `mem0-cli`, `mem0-integrate`, `mem0-oss-to-platform`,
+  `mem0-test-integration`, `mem0-vercel-ai-sdk`, plus the self-host plugin's ops skills
+  (`mem0-search`, `mem0-remember`, `mem0-scope`, `mem0-dream`, `mem0-forget`, `mem0-status`, ...).
+- **cavecrew** — `cavecrew-builder`, `cavecrew-investigator`, `cavecrew-reviewer` (delegation agents +
+  matching slash commands).
+- **codebase-memory** (`~/.claude/skills/`) — decision matrix for the code-graph MCP tools.
+- **i-have-adhd** — output shaping for a distractible reader.
+
+### Commands (`~/.config/opencode/commands/`)
+
+`caveman`, `caveman-commit`, `caveman-compress`, `caveman-help`, `caveman-review`, `caveman-stats`,
+`cavecrew-builder`, `cavecrew-investigator`, `cavecrew-reviewer`, and `rtk.ts`.
+
+### Agent behavior
+
+`~/.config/opencode/AGENTS.md` carries three injected blocks that steer the session:
+
+1. **Memory Router** — mem0 for general memory, PAUL for Jira/Confluence, and the rule for which.
+2. **PAUL project memory** (`paul-project-memory:*`) — installed/refreshed by `setup.sh`; the
+   workflow, ticket format, init protocol and AGENTSMEMORY sync.
+3. **Token efficiency** — decision rules that route code-structure queries to the code graph,
+   file analysis to the sandbox, web content to firecrawl, and multi-step I/O to batches.
+
+### Runtime versions
+
+| Component | Version |
+|-----------|---------|
+| opencode | 1.18.16 |
+| Node.js | 24.19.0 |
+| rtk | 0.45.0 |
+| codebase-memory-mcp | 0.9.0 |
+| context-mode | 1.0.169 |
+| opencode-mem0-selfhost | 0.1.7 |
+| uvx | 0.12.3 |
+| mem0 server | self-hosted, `http://localhost:8888`, auth disabled |
+| firecrawl | self-hosted, `http://localhost:3002` |
+
+### TUI (`~/.config/opencode/tui.json`)
+
+`ctrl+.` opens the command list; `super+shift+z` redoes input.
+
 ## License
 
 MIT © Karl-Augustin Jahnel
