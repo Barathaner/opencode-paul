@@ -101,6 +101,19 @@ paul_load_env() {
     f="$dir/paul.env"
     [ -f "$f" ] || return 0
   fi
+  # The per-profile Atlassian token lives in its OWN file (paul.<profile>.token.env),
+  # not paul.<profile>.env — setup.sh writes it there so several profiles' tokens can
+  # be sourced side by side without clobbering each other (see ~/.bashrc). That file
+  # is normally picked up by interactive shells via .bashrc, but .bashrc returns
+  # immediately for non-interactive shells (`case $- in *i*) ;; *) return;; esac`),
+  # which is exactly how this script runs — so without sourcing it here too, a
+  # profiled run never sees its own ATLASSIAN_API_TOKEN_<PROFILE>, the MCP server
+  # starts with no credentials, and the agent sees zero mcp-atlassian-<profile>_*
+  # tools. Not fatal if absent (default profile keeps its token in $f already).
+  if [ -n "$p" ]; then
+    local tokf="$dir/paul.$p.token.env"
+    [ -f "$tokf" ] && . "$tokf"
+  fi
   # Without a profile the environment wins over the file, so a command-line override is
   # never clobbered. WITH a profile the file wins: the shell rc sources other profiles'
   # tokens and possibly the default profile's settings, and those fixed PAUL_* names
