@@ -291,7 +291,7 @@ sequenceDiagram
 
 ## Changing this document
 
-Update the diagrams whenever a phase's tool sequence changes in `process_meetings.sh` or
+Update the diagrams whenever a phase's tool sequence changes in `src/cli/` or
 `prompts/init_from_docs.md` — they describe what the code and prompts actually do, not an
 aspiration. `scripts/verify.mjs` and `test/` cannot check a Markdown diagram, so keeping this current is a
 manual discipline, same as `docs/TICKET_FORMAT.md`'s own "Changing the format" section.
