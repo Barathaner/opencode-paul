@@ -398,6 +398,23 @@ A `processed_files.csv` hash-tracker skips transcripts that were already process
 script runs OpenCode from a dedicated project dir (`PAUL_PROJECT_DIR`, a git repo) so
 `.paul/memory.json` is a stable per-project store across runs.
 
+### Run summary — tokens + duration
+
+Both `paul-init-docs` and `paul-meetings` print a `RUN SUMMARY` block when they finish:
+status, wall-clock duration, the token breakdown for that run (input / output / reasoning /
+cache-read / cache-write / total), cost, model, and a one-line recap of what the run changed
+(e.g. `PAUL memory now holds: entries=42 docs=31 meetings=5 tickets=6 | cursor: Sprint 4`).
+The numbers come from OpenCode's own session store (`session` table in
+`~/.local/share/opencode/opencode.db`), correlated to the run by project dir + time window —
+so they are the same figures the TUI shows, not an estimate.
+
+Every run is also appended to `runs.csv` in the log dir (`PAUL_LOG_DIR`,
+`~/opencode_automations/logs`), one row per run: `time,task,status,duration_s,tokens_input,
+tokens_output,tokens_reasoning,tokens_cache_read,tokens_cache_write,cost`, so you can compare
+cost/effort across runs. Point `PAUL_OPENCODE_DB` at a different OpenCode data dir if your
+`opencode.db` lives elsewhere; if no session row is found the summary says "unavailable" and
+the run is unaffected.
+
 All paths and keys are environment-overridable (defaults in parentheses):
 
 | Env var | Default | Purpose |
@@ -414,6 +431,7 @@ All paths and keys are environment-overridable (defaults in parentheses):
 | `PAUL_JIRA_BOARD_NAMES` | *(empty)* | their names, for readable output — written by `setup.sh` |
 | `PAUL_JIRA_BOARD_FILTERS` | *(empty)* | their saved-filter ids, which scope what `/paul-init-docs` indexes |
 | `PAUL_AGENTSMEMORY_TITLE` | `AGENTSMEMORY` | shared memory page title |
+| `PAUL_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode session DB the run summary reads tokens/cost from |
 | `PAUL_ROLES` | built-in list | comma-separated [role vocabulary](./docs/ROLES.md) people are mapped to |
 | `PAUL_PROTECTED_TERMS` | built-in list | comma-separated terms the name scrub must never rewrite |
 | `PAUL_REWRITE_DESCRIPTIONS` | `0` | `1` lets the pipeline replace an existing Jira description with a re-rendered one |
@@ -716,6 +734,28 @@ Atlassian server is enabled at a time so a session can never read/decide against
 ### TUI (`~/.config/opencode/tui.json`)
 
 `ctrl+.` opens the command list; `super+shift+z` redoes input.
+
+### expected Time and Token usage
+
+#### fort paul-init-docs with this setup
+
+[2026-08-12 18:35r0:53] =================== RUN SUMMARY ===================
+Task: init-docs | Status: SUCCESS | Duration: 10m 23s
+Tokens: input 65,087 | output 12,512 | reasoning 29,512 | cache-read 2,388,864 | cache-write 0 | total 2,495,975
+Cost: $0.0276 | Model: deepseek-v4-flash
+Important:
+  - PAUL memory now holds: entries=75 meeting=4 doc=46 ticket=25 | cursor=Peking Humanoid World Cup — 8-week sprint, S1 foundation
+[2026-08-12 18:30:53] =================== DOC INIT RUN COMPLETED ===================
+
+#### for paul-meetings
+
+[2026-08-12 18:36:37] =================== RUN SUMMARY ===================
+Task: process-meetings | Status: SUCCESS | Duration: 2m 11s
+Tokens: input 46,400 | output 4,963 | reasoning 5,945 | cache-read 1,765,120 | cache-write 0 | total 1,822,428
+Cost: $0.0145 | Model: deepseek-v4-flash
+Important:
+  - PAUL memory now holds: entries=76 meeting=5 doc=46 ticket=25 | cursor=Sprint 4: Auth flow (ship before billing rework)
+[2026-08-12 18:36:37] =================== RUN COMPLETED ===================
 
 ## License
 

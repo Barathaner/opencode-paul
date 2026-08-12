@@ -8,6 +8,7 @@ import { buildMCPOverlay, mcpKey, isMcpServerConfigured, mcpEnvCheck, otherAtlas
 import { buildJQL, subfilterEncode, jiraBoardConfig, jiraCount, confluenceCount } from "../jira.ts"
 import { render } from "../prompts/init-from-docs.ts"
 import { run } from "../runner.ts"
+import { readSessionUsage, renderSummary, appendRunRecord } from "../metrics.ts"
 
 function log(msg: string, logFile: string): void {
   const line = `[${new Date().toISOString().replace("T", " ").slice(0, 19)}] ${msg}`
@@ -217,6 +218,7 @@ async function main() {
 
   if (cfg.roles) process.env.PAUL_ROLES = cfg.roles
 
+  const t0 = Date.now()
   const result = await run({
     opencodeBin,
     prompt,
@@ -225,22 +227,47 @@ async function main() {
     logFile,
     timeoutMs,
   })
+  const durationMs = Date.now() - t0
 
+  const usage = await readSessionUsage({ directory: cfg.projectDir, sinceMs: t0 })
+  let storeDir = cfg.projectDir
+  if (usage?.directory) {
+    if (usage.directory !== cfg.projectDir) {
+      log(`NOTE: OpenCode ran in project dir ${usage.directory} (configured: ${cfg.projectDir}) — reading that store for the summary.`, logFile)
+    }
+    storeDir = usage.directory
+  }
+  const memPath = join(storeDir, ".paul", "memory.json")
+
+  const important: string[] = []
   if (result.exitCode === 0) {
     log("SUCCESS: OpenCode finished execution successfully.", logFile)
-    const memPath = join(cfg.projectDir, ".paul", "memory.json")
     if (existsSync(memPath)) {
       try {
         const mem = JSON.parse(readFileSync(memPath, "utf8"))
         const types = (mem.entries || []).reduce((acc: Record<string, number>, e: any) => { acc[e.type] = (acc[e.type] || 0) + 1; return acc }, {} as Record<string, number>)
         const typeStr = Object.entries(types).map(([k, v]) => `${k}=${v}`).join(" ")
-        log(`PAUL memory now holds: entries=${(mem.entries || []).length} ${typeStr} | cursor=${mem.cursor?.phase || ""}`, logFile)
+        const line = `PAUL memory now holds: entries=${(mem.entries || []).length} ${typeStr} | cursor=${mem.cursor?.phase || ""}`
+        log(line, logFile)
+        important.push(line)
       } catch { /* summary not critical */ }
     }
     log("Re-run this script any time to refresh memory; unchanged pages are skipped by version.", logFile)
   } else {
-    log(`ERROR: OpenCode execution failed with exit code ${result.exitCode}.`, logFile)
+    const line = `OpenCode execution failed with exit code ${result.exitCode}.`
+    log(`ERROR: ${line}`, logFile)
+    important.push(line)
   }
+
+  const summary = renderSummary({ task: "init-docs", status: result.exitCode === 0 ? "SUCCESS" : "ERROR", durationMs, usage, important })
+  log(summary, logFile)
+  appendRunRecord(join(cfg.logDir, "runs.csv"), {
+    time: new Date().toISOString().replace("T", " ").slice(0, 19),
+    task: "init-docs",
+    status: result.exitCode === 0 ? "SUCCESS" : "ERROR",
+    durationMs,
+    usage,
+  })
 
   log("=================== DOC INIT RUN COMPLETED ===================", logFile)
   process.exit(result.exitCode || 0)

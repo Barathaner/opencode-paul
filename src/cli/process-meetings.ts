@@ -7,6 +7,7 @@ import { loadConfig } from "../config.ts"
 import { buildMCPOverlay, mcpKey, isMcpServerConfigured, mcpEnvCheck, otherAtlassianServers } from "../mcp-scope.ts"
 import { render } from "../prompts/process-meetings.ts"
 import { run } from "../runner.ts"
+import { readSessionUsage, renderSummary, appendRunRecord } from "../metrics.ts"
 import { ProcessedTracker } from "../hash.ts"
 
 function log(msg: string, logFile: string): void {
@@ -117,6 +118,7 @@ async function main() {
   }, transcriptText)
 
   log(`Invoking OpenCode CLI (${opencodeBin}) with PAUL memory integration...`, logFile)
+  const t0 = Date.now()
   const result = await run({
     opencodeBin,
     prompt,
@@ -124,10 +126,33 @@ async function main() {
     overlay,
     logFile,
   })
+  const durationMs = Date.now() - t0
 
+  const usage = await readSessionUsage({ directory: cfg.projectDir, sinceMs: t0 })
+  let storeDir = cfg.projectDir
+  if (usage?.directory) {
+    if (usage.directory !== cfg.projectDir) {
+      log(`NOTE: OpenCode ran in project dir ${usage.directory} (configured: ${cfg.projectDir}) — reading that store for the summary.`, logFile)
+    }
+    storeDir = usage.directory
+  }
+  const memPath = join(storeDir, ".paul", "memory.json")
+
+  const important: string[] = []
   if (result.exitCode === 0) {
     log("SUCCESS: OpenCode finished execution successfully.", logFile)
     tracker.record(jsonFile)
+
+    if (existsSync(memPath)) {
+      try {
+        const mem = JSON.parse(readFileSync(memPath, "utf8"))
+        const types = (mem.entries || []).reduce((acc: Record<string, number>, e: any) => { acc[e.type] = (acc[e.type] || 0) + 1; return acc }, {} as Record<string, number>)
+        const typeStr = Object.entries(types).map(([k, v]) => `${k}=${v}`).join(" ")
+        const line = `PAUL memory now holds: entries=${(mem.entries || []).length} ${typeStr} | cursor=${mem.cursor?.phase || ""}`
+        log(line, logFile)
+        important.push(line)
+      } catch { /* summary not critical */ }
+    }
 
     // PHASE 5 — board reorder
     if (cfg.reorderApply === "1") {
@@ -151,8 +176,20 @@ async function main() {
       log("PAUL_REORDER_APPLY != 1 — board reorder skipped.", logFile)
     }
   } else {
-    log(`ERROR: OpenCode execution failed with exit code ${result.exitCode}.`, logFile)
+    const line = `OpenCode execution failed with exit code ${result.exitCode}.`
+    log(`ERROR: ${line}`, logFile)
+    important.push(line)
   }
+
+  const summary = renderSummary({ task: "process-meetings", status: result.exitCode === 0 ? "SUCCESS" : "ERROR", durationMs, usage, important })
+  log(summary, logFile)
+  appendRunRecord(join(cfg.logDir, "runs.csv"), {
+    time: new Date().toISOString().replace("T", " ").slice(0, 19),
+    task: "process-meetings",
+    status: result.exitCode === 0 ? "SUCCESS" : "ERROR",
+    durationMs,
+    usage,
+  })
 
   log("=================== RUN COMPLETED ===================", logFile)
   process.exit(result.exitCode || 0)

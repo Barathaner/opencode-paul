@@ -28,6 +28,7 @@ export function run(opts: RunOpts): Promise<RunResult> {
     mkdirSync(dirname(opts.logFile), { recursive: true })
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>) }
+    env.PWD = cwd
     if (opts.overlay) {
       env.OPENCODE_CONFIG_CONTENT = opts.overlay
     }
