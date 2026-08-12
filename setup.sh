@@ -998,6 +998,17 @@ elif [ -f "$REPO_DIR/scripts/verify.mjs" ]; then
   fi
 fi
 
+# Link the bin commands so paul-init-docs / paul-meetings / paul-reorder
+# work from any directory.
+if [ -f "$REPO_DIR/package.json" ]; then
+  say "linking CLI commands…"
+  if ( cd "$REPO_DIR" && npm install -g . --silent >/dev/null 2>&1 ); then
+    ok "paul-init-docs, paul-meetings, paul-reorder now available from any directory"
+  else
+    warn "could not link CLI commands — use node --experimental-strip-types instead"
+  fi
+fi
+
 # mcp-atlassian is what actually talks to Jira and Confluence. Resolving it now
 # both proves it can start and warms the uvx cache, so the first OpenCode run does
 # not stall on a silent download. Never fatal: setup is still valid without it.
@@ -1028,7 +1039,7 @@ if [ "$BOOTSTRAP" = "1" ]; then
   if command -v node >/dev/null 2>&1; then
     node --experimental-strip-types "$REPO_DIR/src/cli/init-from-docs.ts" \
       && ok "PAUL memory indexed from your documentation" \
-      || warn "indexing did not finish (re-run: $RUN_PREFIX$REPO_DIR/src/cli/init-from-docs.ts)"
+      || warn "indexing did not finish (re-run: node --experimental-strip-types src/cli/init-from-docs.ts ${PAUL_PROFILE:+from the repo with PAUL_PROFILE=$PAUL_PROFILE})"
   else
     warn "node not found — skipping the index"
   fi
@@ -1038,16 +1049,16 @@ echo
 echo "${GRN}${BOLD}PAUL is set up.${RST}${PAUL_PROFILE:+ ${DIM}(profile $PAUL_PROFILE)${RST}}"
 echo
 echo "${BOLD}Next steps${RST}"
-# Every command below has to name the profile, or it runs the default install.
 RUN_PREFIX="${PAUL_PROFILE:+PAUL_PROFILE=$PAUL_PROFILE }"
 if [ "$BOOTSTRAP" = "1" ]; then
   echo "  1. Memory is indexed. Refresh it any time (unchanged pages are skipped):"
 else
   echo "  1. Teach PAUL the project you already have (read-only, safe to repeat):"
 fi
-echo "       ${CYN}${RUN_PREFIX}paul-init-docs${RST}   ${DIM}or /$CMD_NAME in a session${RST}"
+echo "       ${CYN}${RUN_PREFIX}paul-init-docs${RST}"
+echo "       ${DIM}or /$CMD_NAME in an OpenCode session${RST}"
 echo "  2. Try the meeting pipeline on the sample transcript:"
-echo "       ${CYN}${RUN_PREFIX}$REPO_DIR/process_meetings.sh $REPO_DIR/examples/sample-transcript.json${RST}"
+echo "       ${CYN}${RUN_PREFIX}paul-meetings examples/robofootball-weekly-transcript.json${RST}"
 echo "  3. Or just open OpenCode in any project and ask it to use the paul_* tools."
 
 # A shell started before this run still exports the OLD paul.env (the rc line below puts

@@ -65,10 +65,11 @@ cd opencode-paul
 Every answer lands in `~/.config/opencode/paul.env`, which every PAUL script reads. **That file is
 where to change your mind** — re-running `setup.sh` keeps whatever you set there.
 
-That is the whole setup. After it finishes, three commands cover daily use:
+That is the whole setup. After it finishes, three commands cover daily use
+(`npm link` makes them available from any directory):
 
 ```bash
-# Index existing Confluence docs + Jira tickets into PAUL memory (read-only, safe to repeat)
+# Index existing Confluence docs + Jira tickets into PAUL memory
 paul-init-docs
 
 # Process a meeting transcript — turn it into Confluence notes + Jira tickets
@@ -78,8 +79,7 @@ paul-meetings path/to/transcript.json
 paul-reorder
 ```
 
-Inside an **OpenCode session**, the `paul_*` tools are available directly — ask the agent
-to create a ticket, check the roadmap, or run `/paul-init-docs`. No shell needed.
+Prefix with `PAUL_PROFILE=robo` for a named profile.
 
 Re-running `setup.sh` is safe (idempotent). Prefer no prompts? Preset the answers — add
 `PAUL_BOOTSTRAP=1` to index the docs in the same run, and `JIRA_BOARDS` to pick boards by id:

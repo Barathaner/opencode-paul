@@ -40,8 +40,14 @@ export function run(opts: RunOpts): Promise<RunResult> {
 
     let stdout = ""
     let stderr = ""
-    child.stdout.on("data", (d: Buffer) => { stdout += d.toString() })
-    child.stderr.on("data", (d: Buffer) => { stderr += d.toString() })
+    child.stdout.on("data", (d: Buffer) => {
+      process.stdout.write(d)
+      stdout += d.toString()
+    })
+    child.stderr.on("data", (d: Buffer) => {
+      process.stderr.write(d)
+      stderr += d.toString()
+    })
 
     let timedOut = false
     const timer = setTimeout(() => {

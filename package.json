@@ -45,9 +45,9 @@
     "package.json"
   ],
   "bin": {
-    "paul-meetings": "node --experimental-strip-types src/cli/process-meetings.ts",
-    "paul-init-docs": "node --experimental-strip-types src/cli/init-from-docs.ts",
-    "paul-reorder": "node --experimental-strip-types src/cli/reorder-board.ts"
+    "paul-meetings": "scripts/paul-meetings",
+    "paul-init-docs": "scripts/paul-init-docs",
+    "paul-reorder": "scripts/paul-reorder"
   },
   "scripts": {
     "test": "node --test --experimental-strip-types scripts/verify.mjs && node --test --experimental-strip-types test/*.test.ts",
