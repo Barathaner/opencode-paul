@@ -554,24 +554,62 @@ if [ -n "$JIRA_BOARDS" ] && [ -n "$BOARDS_JSON" ]; then
         JIRA_BOARD_SUBFILTERS="$JIRA_BOARD_SUBFILTERS$(paul_subfilter_encode "$SUBQ")"
         NSUBS=$((NSUBS + 1))
       fi
-      # Which PAUL status does each of THIS board's actual columns represent? Asked once
-      # here rather than guessed by string-matching column names against PAUL's own
-      # status words — a column named "Zu erledigen" or "In Review" would never match
-      # "todo"/"review" by string comparison, and a board's columns are whatever the team
-      # named them. The AI reorder run (prompts/reorder_board.md) re-derives this if the
-      # board's columns changed since, so a stale or missing mapping is not load-bearing.
+      # The AI derives column→PAUL-status at runtime (prompts/reorder_board.md).
+      # Store a smart default here so the AI has a starting point.
       COLS=$(jq -r '(.columnConfig.columns // [])[] | .name' "$RESP" 2>/dev/null)
-      if [ -n "$COLS" ] && [ "${PAUL_SKIP_CHECKS:-0}" != "1" ] && [ "$NONINTERACTIVE" != "1" ]; then
-        echo
-        echo "   ${BOLD}Board $id's columns.${RST} Which PAUL status does each represent?"
-        echo "   ${DIM}(backlog | todo | in_progress | review | blocked | done | skip — skip = never reranked)${RST}"
-        BOARD_MAP="{}"
+      if [ -n "$COLS" ]; then
+        # Collect column names into an indexed array for the numbered choice below.
+        COL_NAMES=(); COL_STATUSES=()
         while IFS= read -r COLNAME; do
           [ -n "$COLNAME" ] || continue
-          PRIOR=$(jq -r --arg id "$id" --arg c "$COLNAME" '.[$id][$c] // ""' <<<"${STORED_PAUL_JIRA_BOARD_COLUMN_MAP_JSON:-{}}" 2>/dev/null)
-          ask "COL_STATUS" "     \"$COLNAME\" ->" "${PRIOR:-}"
-          BOARD_MAP=$(jq -c --arg c "$COLNAME" --arg s "$COL_STATUS" '.[$c] = $s' <<<"$BOARD_MAP")
+          COL_NAMES+=("$COLNAME")
+          lower="$(printf '%s' "$COLNAME" | tr '[:upper:]' '[:lower:]')"
+          if   [[ $lower == *backlog* ]] || [[ $lower == *'zu erledigen'* ]]; then st="backlog"
+          elif [[ $lower == *'to do'* ]] || [[ $lower == *erledigen* ]] || [[ $lower == *offen* ]] || [[ $lower == *open* ]]; then st="todo"
+          elif [[ $lower == *'in progress'* ]] || [[ $lower == *doing* ]] || [[ $lower == *arbeit* ]]; then st="in_progress"
+          elif [[ $lower == *review* ]] || [[ $lower == *test* ]] || [[ $lower == *qa* ]] || [[ $lower == *'prüfung'* ]]; then st="review"
+          elif [[ $lower == *blocked* ]] || [[ $lower == *'on hold'* ]] || [[ $lower == *wart* ]]; then st="blocked"
+          elif [[ $lower == *done* ]] || [[ $lower == *resolved* ]] || [[ $lower == *closed* ]] || [[ $lower == *erledigt* ]] || [[ $lower == *abgeschlossen* ]]; then st="done"
+          else st="skip"
+          fi
+          COL_STATUSES+=("$st")
         done <<<"$COLS"
+
+        # Show the mapping.
+        echo
+        echo "   ${BOLD}Board $id columns → PAUL status${RST} ${DIM}(auto-detected)${RST}"
+        for i in "${!COL_NAMES[@]}"; do
+          printf "    %2d) %-24s ${GRN}→ %s${RST}\n" "$((i+1))" "\"${COL_NAMES[$i]}\"" "${COL_STATUSES[$i]}"
+        done
+
+        if [ "$NONINTERACTIVE" != "1" ]; then
+          echo
+          printf "   Change any? ${DIM}(column numbers, or Enter to keep all)${RST} "
+          read -r changes
+          if [ -n "$changes" ]; then
+            for num in $changes; do
+              idx=$((num - 1))
+              if [ -z "${COL_NAMES[$idx]}" ]; then
+                echo "     ${DIM}$num: no such column${RST}"
+                continue
+              fi
+              printf "   \"%s\" is \"%s\" -> new status: " "${COL_NAMES[$idx]}" "${COL_STATUSES[$idx]}"
+              read -r new_st
+              if [ -n "$new_st" ]; then
+                # Validate.
+                case "$new_st" in
+                  backlog|todo|in_progress|review|blocked|done|skip) COL_STATUSES[$idx]="$new_st" ;;
+                  *) echo "     ${DIM}unknown — kept \"${COL_STATUSES[$idx]}\"${RST}" ;;
+                esac
+              fi
+            done
+          fi
+        fi
+
+        BOARD_MAP="{}"
+        for i in "${!COL_NAMES[@]}"; do
+          BOARD_MAP=$(jq -c --arg c "${COL_NAMES[$i]}" --arg s "${COL_STATUSES[$i]}" '.[$c] = $s' <<<"$BOARD_MAP")
+        done
         COLUMN_MAP_JSON=$(jq -c --arg id "$id" --argjson m "$BOARD_MAP" '.[$id] = $m' <<<"$COLUMN_MAP_JSON")
       fi
     else
@@ -773,7 +811,7 @@ export PAUL_REORDER_INCLUDE_IN_PROGRESS="${PAUL_REORDER_INCLUDE_IN_PROGRESS:-0}"
 # PAUL, AGENTSMEMORY, OpenCode, Confluence, Jira and Atlassian are always protected.
 export PAUL_PROTECTED_TERMS="$PAUL_PROTECTED_TERMS"
 #
-# /paul-init-docs and init_from_docs.sh skip pages whose TITLE (or an ancestor folder's
+# /paul-init-docs and paul-init-docs skip pages whose TITLE (or an ancestor folder's
 # title) contains one of these words, case-insensitively, and remove any previously
 # indexed page that starts matching later (moved to that folder, or renamed).
 export PAUL_STALE_MARKERS="$PAUL_STALE_MARKERS"
@@ -952,9 +990,8 @@ if [ ! -d "$SDK_DIR" ]; then
   warn "run it later with: ${BOLD}cd $REPO_DIR && npm install && npm test${RST}"
 elif [ -f "$REPO_DIR/scripts/verify.mjs" ]; then
   HARNESS_OUT=$( cd "$REPO_DIR" && npm test --silent 2>&1 )
-  HARNESS_LAST=$(printf '%s\n' "$HARNESS_OUT" | tail -1)
-  if printf '%s' "$HARNESS_LAST" | grep -q "0 failed"; then
-    ok "tool harness passed ${DIM}(${HARNESS_LAST//=/})${RST}"
+  if printf '%s\n' "$HARNESS_OUT" | grep -qE "(ℹ fail 0|0 failed)" || printf '%s\n' "$HARNESS_OUT" | grep -q "0 failed"; then
+    ok "tool harness passed"
   else
     warn "harness reported issues (re-run: cd $REPO_DIR && npm test):"
     printf '%s\n' "$HARNESS_OUT" | grep -E "^FAIL|Error" | head -5 | sed 's/^/     /'
@@ -988,12 +1025,12 @@ if [ -z "$BOOTSTRAP" ] && [ "$NONINTERACTIVE" != "1" ]; then
 fi
 
 if [ "$BOOTSTRAP" = "1" ]; then
-  if [ -x "$REPO_DIR/scripts/init_from_docs.sh" ]; then
-    "$REPO_DIR/scripts/init_from_docs.sh" \
+  if command -v node >/dev/null 2>&1; then
+    node --experimental-strip-types "$REPO_DIR/src/cli/init-from-docs.ts" \
       && ok "PAUL memory indexed from your documentation" \
-      || warn "indexing did not finish (re-run: $REPO_DIR/scripts/init_from_docs.sh)"
+      || warn "indexing did not finish (re-run: $RUN_PREFIX$REPO_DIR/src/cli/init-from-docs.ts)"
   else
-    warn "scripts/init_from_docs.sh not found/executable — skipping the index"
+    warn "node not found — skipping the index"
   fi
 fi
 
@@ -1008,7 +1045,7 @@ if [ "$BOOTSTRAP" = "1" ]; then
 else
   echo "  1. Teach PAUL the project you already have (read-only, safe to repeat):"
 fi
-echo "       ${CYN}${RUN_PREFIX}$REPO_DIR/scripts/init_from_docs.sh${RST}   ${DIM}or /$CMD_NAME in a session${RST}"
+echo "       ${CYN}${RUN_PREFIX}paul-init-docs${RST}   ${DIM}or /$CMD_NAME in a session${RST}"
 echo "  2. Try the meeting pipeline on the sample transcript:"
 echo "       ${CYN}${RUN_PREFIX}$REPO_DIR/process_meetings.sh $REPO_DIR/examples/sample-transcript.json${RST}"
 echo "  3. Or just open OpenCode in any project and ask it to use the paul_* tools."

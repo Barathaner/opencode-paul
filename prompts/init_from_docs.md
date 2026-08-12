@@ -269,8 +269,17 @@ Jira — the project "{{JIRA_PROJECT}}"{{JIRA_SCOPE}}:
 - Full descriptions: call jira_get_issue ONLY for issues whose mapped status is backlog, todo or
   in_progress — those are the ones that get a spec in PHASE 4. Issues in review, blocked or done are
   summarized from the search fields alone; do not spend a round trip on them.
-- Map each Jira status onto exactly one PAUL status: backlog | todo | in_progress | blocked |
-  review | done.
+- Map each Jira ISSUE STATUS (the status field on the issue, NOT the board column name) onto
+  exactly one PAUL status:
+  • "To Do" / "Open" / "Backlog" → todo (unless it is genuinely the backlog concept → backlog)
+  • "In Progress" / "Doing" / "Working" → in_progress
+  • "In Review" / "Testing" / "QA" / "Code Review" → review — NEVER in_progress
+  • "Blocked" / "On Hold" → blocked
+  • "Done" / "Resolved" / "Closed" / "Completed" → done
+  • Any status that sounds like it means "not started" or "waiting to be picked up" → todo.
+  • Any status that sounds like review/gate/before-done → review.
+  Only map to backlog when the status genuinely means "not triaged/sorted yet."
+  The mapping must be a partition: exactly ONE PAUL status per Jira status.
 - Note the issue type (Task, Story, Bug, Epic) and the issue URL.
 
 PHASE 4 — SUMMARIZE AND PERSIST (one paul_init call):

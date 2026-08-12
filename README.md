@@ -65,14 +65,21 @@ cd opencode-paul
 Every answer lands in `~/.config/opencode/paul.env`, which every PAUL script reads. **That file is
 where to change your mind** — re-running `setup.sh` keeps whatever you set there.
 
-That is the whole setup. There is no `source` step in a new shell: every script loads
-`~/.config/opencode/paul.env` itself. In the terminal you ran setup *in*, values exported before
-the run still win over the file — setup tells you when that applies and prints the `source` line.
-To try the meeting pipeline on the bundled sample:
+That is the whole setup. After it finishes, three commands cover daily use:
 
 ```bash
-paul-meetings examples/sample-transcript.json
+# Index existing Confluence docs + Jira tickets into PAUL memory (read-only, safe to repeat)
+paul-init-docs
+
+# Process a meeting transcript — turn it into Confluence notes + Jira tickets
+paul-meetings path/to/transcript.json
+
+# Re-rank your Jira board (preview only; add PAUL_REORDER_APPLY=1 to apply)
+paul-reorder
 ```
+
+Inside an **OpenCode session**, the `paul_*` tools are available directly — ask the agent
+to create a ticket, check the roadmap, or run `/paul-init-docs`. No shell needed.
 
 Re-running `setup.sh` is safe (idempotent). Prefer no prompts? Preset the answers — add
 `PAUL_BOOTSTRAP=1` to index the docs in the same run, and `JIRA_BOARDS` to pick boards by id:
