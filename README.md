@@ -1,8 +1,10 @@
 # opencode-paul
 
-**PAUL** is structured, per-project **agent memory** for [OpenCode](https://opencode.ai) —
-roadmap / Kanban state the agent can list, order, and keep truthful across sessions, with
-optional two-way sync to Jira & Confluence.
+**PAUL** — **P**ersistent (**memory**), **A**tlassian, **U**nderstanding, (**meeting**) **L**ogger.
+
+Structured per-project agent memory for [OpenCode](https://opencode.ai): turn meeting
+transcripts into Jira tickets, keep roadmap / Kanban state truthful across sessions,
+and sync both ways with Jira & Confluence.
 
 Instead of letting the agent scribble roadmap notes into prose (which drift and corrupt),
 PAUL gives it real verbs backed by an atomic per-project JSON store at
@@ -24,8 +26,10 @@ cd opencode-paul
 
 `setup.sh` will:
 
-1. Check/install prerequisites (`jq`, `curl`, Node, `opencode`, `uvx`).
-2. Install PAUL's eleven tools into `~/.config/opencode/tools/`.
+1. Check/install prerequisites (Node, `opencode`, `uvx`; `jq`/`curl` only needed by the legacy
+   bash shims — the TS core uses `fetch` and `crypto` instead).
+2. Register the PAUL plugin in `opencode.json` (the `"plugin":["opencode-paul"]` entry).
+   No file copies needed — OpenCode resolves it from npm or a local checkout.
 3. Ask for your **Atlassian base URL, email, API token**, Jira project key and Confluence
    space (get a token at
    [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)).
@@ -61,14 +65,21 @@ cd opencode-paul
 Every answer lands in `~/.config/opencode/paul.env`, which every PAUL script reads. **That file is
 where to change your mind** — re-running `setup.sh` keeps whatever you set there.
 
-That is the whole setup. There is no `source` step in a new shell: every script loads
-`~/.config/opencode/paul.env` itself. In the terminal you ran setup *in*, values exported before
-the run still win over the file — setup tells you when that applies and prints the `source` line.
-To try the meeting pipeline on the bundled sample:
+That is the whole setup. After it finishes, three commands cover daily use
+(`npm link` makes them available from any directory):
 
 ```bash
-./process_meetings.sh examples/sample-transcript.json
+# Index existing Confluence docs + Jira tickets into PAUL memory
+paul-init-docs
+
+# Process a meeting transcript — turn it into Confluence notes + Jira tickets
+paul-meetings path/to/transcript.json
+
+# Re-rank your Jira board (preview only; add PAUL_REORDER_APPLY=1 to apply)
+paul-reorder
 ```
+
+Prefix with `PAUL_PROFILE=robo` for a named profile.
 
 Re-running `setup.sh` is safe (idempotent). Prefer no prompts? Preset the answers — add
 `PAUL_BOOTSTRAP=1` to index the docs in the same run, and `JIRA_BOARDS` to pick boards by id:
@@ -184,10 +195,10 @@ is never uploaded and never logged. Full reference: [`docs/ROLES.md`](./docs/ROL
 
 ## Manual install (advanced)
 
-The quick start above is the recommended path. If you'd rather wire it up yourself, there
-are two ways. The **plugin** path is easiest to share; the **custom-tool** path needs no npm.
+The quick start above is the recommended path. If you'd rather wire it up yourself, add PAUL
+as an OpenCode plugin:
 
-### Option A — as a plugin (recommended)
+### As a plugin
 
 Add the package to your OpenCode config. OpenCode auto-installs it with Bun at startup.
 
@@ -206,21 +217,6 @@ Install straight from GitHub without publishing to npm:
 ```
 
 (Once published: `{ "plugin": ["opencode-paul"] }` resolves from the npm registry.)
-
-### Option B — as a drop-in custom tool (no npm)
-
-Clone and run the installer; it copies the single self-contained tool file into your
-global tools directory:
-
-```bash
-git clone https://github.com/Barathaner/opencode-paul.git
-cd opencode-paul
-./scripts/install.sh          # copies tool/paul.ts -> ~/.config/opencode/tools/paul.ts
-```
-
-Or manually: copy `tool/paul.ts` into `~/.config/opencode/tools/` (global) or
-`<your-project>/.opencode/tools/` (project-scoped). The filename `paul.ts` makes the
-tools `paul_list`, `paul_add`, … automatically.
 
 ### Teach the agent when to use it
 
@@ -267,7 +263,7 @@ Never hardcode tokens — use `{env:VAR}` and export the real value from your sh
 (`mcp-atlassian-<profile>`) with its own URL and its own `{env:ATLASSIAN_API_TOKEN_<PROFILE>}`,
 so two Atlassian sites can sit side by side in one `opencode.json`.
 
-## Bootstrap from the docs you already have (`scripts/init_from_docs.sh`)
+## ##  (which regenerates the slash command)
 
 A team that already has a Confluence space and a Jira board should not have to wait for the next
 meeting before PAUL knows anything. This entrypoint has the agent **read** what already exists —
@@ -300,13 +296,13 @@ On a large space the run fans out: one subagent per documentation tree, each ret
 summaries rather than page bodies, so the bulk of the text never enters the main context.
 
 ```bash
-./scripts/init_from_docs.sh              # incremental — safe to repeat
-./scripts/init_from_docs.sh --reset      # rebuild memory from scratch
-./scripts/init_from_docs.sh --dry-run    # print the prompt, call nothing
-./scripts/init_from_docs.sh --board 12   # index only what board 12 shows
-./scripts/init_from_docs.sh --no-board   # index the whole project on purpose
-./scripts/init_from_docs.sh --root 1001  # index only that documentation tree
-./scripts/init_from_docs.sh --no-root    # index the whole space on purpose
+paul-init-docs              # incremental — safe to repeat
+paul-init-docs --reset      # rebuild memory from scratch
+paul-init-docs --dry-run    # print the prompt, call nothing
+paul-init-docs --board 12   # index only what board 12 shows
+paul-init-docs --no-board   # index the whole project on purpose
+paul-init-docs --root 1001  # index only that documentation tree
+paul-init-docs --no-root    # index the whole space on purpose
 ```
 
 **A board scope that cannot be resolved aborts the run** (exit 3) instead of falling back to the
@@ -317,7 +313,7 @@ continues with what resolved; the log prints the filter ids and the exact JQL, s
 a scope the search does not have.
 
 Inside an OpenCode session, the same protocol runs as `/paul-init-docs` (installed by `setup.sh`,
-and re-generated by every `setup.sh` run; `./scripts/install_command.sh` regenerates it on its own).
+and re-generated by every `setup.sh` run; the `/paul-init-docs` command is regenerated at the same time).
 Under a profile it is `/paul-init-docs-<profile>`.
 
 **It is read-only by contract**: it never creates or edits a Jira issue, never transitions, assigns
@@ -335,9 +331,9 @@ duplicating them — that guarantee needs nothing beyond the upsert itself.
 any unaccounted-for gap in its result so a human can go look. This is a report only — it never
 mutates stored entries, and passing nothing is fine too.
 
-## The meeting pipeline (`process_meetings.sh`)
+## The meeting pipeline (`paul-meetings`)
 
-This is what PAUL was built for. `process_meetings.sh` takes a Whisper-style JSON
+This is what PAUL was built for. `paul-meetings` takes a Whisper-style JSON
 transcript and drives OpenCode to turn it into Confluence notes + Jira tasks — but with
 PAUL as the **memory layer** so runs are *stateful* instead of blind:
 
@@ -345,7 +341,7 @@ See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md#sequence-diagram--process_me
 for the phase-by-phase sequence diagram.
 
 ```bash
-./process_meetings.sh /path/to/transcript.json
+paul-meetings /path/to/transcript.json
 ```
 
 The transcript is `{ "segments": [{ "text": "..." }, ...] }` (Whisper output). See
@@ -377,7 +373,7 @@ What each run does, in order:
 6. **Push memory** — exports and updates the `AGENTSMEMORY` page, so the next run — or a
    teammate on another machine — starts from this meeting's state.
 7. **Reorder the board** (only when authorised) — if `PAUL_REORDER_APPLY=1` (setup answer:
-   "yes"), `scripts/reorder_board.sh` decides the order the board *should* have
+   "yes"), `paul-reorder` decides the order the board *should* have
    if it matched PAUL's priorities and applies it via the rank API. When a board is scoped (`PAUL_JIRA_BOARDS`) and OpenCode
    is reachable, it does this by asking the agent: pulling PAUL memory fresh from AGENTSMEMORY,
    reading the board's ACTUAL columns (never assuming a column named "Zu erledigen" or "In Review"
@@ -390,7 +386,7 @@ What each run does, in order:
     `order`. On an existing project the column order is usually something a team agreed in
     refinement, and replacing it should be a decision rather than a side effect of processing
     a transcript — hence the gate. Set `PAUL_REORDER_APPLY=1` in `paul.env` to enable (setup
-    asks), or run `scripts/reorder_board.sh` standalone for a preview. By
+    asks), or run `paul-reorder` standalone for a preview. By
    default it reranks `todo` + `backlog`; `review`, `blocked` and `done` are always left untouched,
    and `in_progress` only if you set `PAUL_REORDER_INCLUDE_IN_PROGRESS=1`. mcp-atlassian has no
    rank tool, so applying calls the Jira Agile REST API (`PUT /rest/agile/1.0/issue/rank`)
@@ -423,7 +419,7 @@ All paths and keys are environment-overridable (defaults in parentheses):
 | `PAUL_ROLES` | built-in list | comma-separated [role vocabulary](./docs/ROLES.md) people are mapped to |
 | `PAUL_PROTECTED_TERMS` | built-in list | comma-separated terms the name scrub must never rewrite |
 | `PAUL_REWRITE_DESCRIPTIONS` | `0` | `1` lets the pipeline replace an existing Jira description with a re-rendered one |
-| `PAUL_REORDER_APPLY` | `0` | `1` runs the board reorder after each meeting (setup asks; default "no"). `0` skips it entirely — run `scripts/reorder_board.sh` standalone for a preview. |
+| `PAUL_REORDER_APPLY` | `0` | `1` runs the board reorder after each meeting (setup asks; default "no"). `0` skips it entirely — run `paul-reorder` standalone for a preview. |
 
 The last three behaviour switches are asked during `setup.sh` and stored in
 `~/.config/opencode/paul.env`; edit that file to change them at any time. The scripts read it
@@ -442,14 +438,14 @@ project ever had. What you actually see on the board is that filter minus its *s
 (`PAUL_JIRA_BOARD_SUBFILTERS`, typically `status != Done OR updated >= -14d`), which keeps finished
 work off the board. Indexing on the saved filter alone is how a board showing 130 tickets turns into
 a 300-ticket read. `setup.sh` stores both, and the index applies both. `--full-filter` opts back out
-to the whole saved filter; `./scripts/init_from_docs.sh --count` prints how many issues each choice
+to the whole saved filter; `paul-init-docs --count` prints how many issues each choice
 means before you spend the time.
 
 `setup.sh` asks every question on every interactive run, including the API token, so rotating a
 token or moving to another site is just a re-run. Presets in the environment become the prompt
 default (Enter keeps them); use `NONINTERACTIVE=1` to answer entirely from the environment.
 
-**Board reorder** (`scripts/reorder_board.sh`, called automatically in step 7, also runnable
+**Board reorder** (`paul-reorder`, called automatically in step 7, also runnable
 standalone) needs Jira REST credentials — reuse your Atlassian ones:
 
 | Env var | Purpose |
@@ -471,9 +467,9 @@ standalone) needs Jira REST credentials — reuse your Atlassian ones:
 **AI mode** (default, when a board is scoped): the agent — not this script — decides both the
 column->status mapping and the ranking within each column, using full PAUL memory (priority,
 complexity, dependencies, background docs, the roadmap cursor) rather than a fixed formula. It
-writes its decision to `.paul/reorder_plan.<board_id>.json`; `reorder_board.sh` then only reads
+writes its decision to `.paul/reorder_plan.<board_id>.json`; `paul-reorder` then only reads
 that file and calls the rank API in the order given — it never invents an order itself in this
-mode. Like `process_meetings.sh`/`init_from_docs.sh`, this run disables every other configured
+mode. Like `paul-meetings`/`paul-init-docs`, this run disables every other configured
 Atlassian MCP server for its duration, so a machine with two sites wired up cannot have the agent
 read/decide against the wrong one. If the agent run fails for a board, times out, or writes no
 valid plan, that ONE board falls back to
@@ -518,8 +514,8 @@ PAUL_PROFILE=siteb     ./setup.sh     # a second, fully independent one
 Then name the profile on every command:
 
 ```bash
-PAUL_PROFILE=siteb ./scripts/init_from_docs.sh
-PAUL_PROFILE=siteb ./scripts/reorder_board.sh
+PAUL_PROFILE=siteb paul-init-docs
+PAUL_PROFILE=siteb paul-reorder
 ```
 
 Three rules worth knowing:
@@ -530,7 +526,7 @@ Three rules worth knowing:
 - **A run sees only its own Atlassian server.** Both servers are enabled in `opencode.json`, so
   without this the agent picks one — and a privat-profile run once searched the work tenant, found
   nothing, and reported success. Every prompt now names the server it must use, and
-  `init_from_docs.sh` / `process_meetings.sh` disable the others for the duration of the run (via
+  `paul-init-docs` / `paul-meetings` disable the others for the duration of the run (via
   `OPENCODE_CONFIG_CONTENT`; your `opencode.json` is not touched). The run logs which server it
   used and what it switched off, and aborts if the profile's own server is missing.
 - **Under a profile, the settings file wins over your shell.** Without a profile the old
@@ -567,19 +563,50 @@ position. Lower `order` = higher priority on the board. Statuses:
 documentation summaries (with `meta.version` and `meta.parentId` for pages inside a tree),
 `meeting` entries the dated notes.
 
+## Repository layout
+
+```
+src/
+  types.ts             domain model (Entry, Store, TicketSpec, …)
+  store.ts             JSON store — atomic tmp+rename, load/save
+  roster.ts            name→role roster (gitignored, never exported)
+  scrub.ts             regex-based name→role rewrite + protected-term mask
+  ticket.ts            renderTicketDescription — deterministic format
+  page.ts              renderPageBody + extractStoreJson (Confluence mirror)
+  config.ts            env/profile loading (one copy, replaces 3× bash)
+  mcp-scope.ts         MCP server overlay builder
+  jira.ts              fetch-based Jira REST client
+  hash.ts              sha256 via node:crypto + processed_files.csv tracker
+  runner.ts            spawn opencode run --auto with timeout + overlay
+  prompts/             template renderers (process-meetings, init-from-docs, reorder-board)
+  tools/               11 paul_* tool definitions (add, list, update, …)
+  cli/                 TS driver entrypoints (bash shims still primary)
+  install/             TS installer modules (privileged operations via setup.sh)
+plugin.ts              OpenCode plugin entry (exports all 11 tools)
+test/                  per-module smoke tests (node:test)
+prompts/*.md           prompt templates — data format, rendered by src/prompts/
+docs/                  workflow docs (architecture, roles, ticket format, init protocol)
+scripts/               bash shims for cron/CLI compatibility
+setup.sh               interactive installer (last bash holdout)
+```
+
 ## Develop / test
 
-The implementation lives once in [`tool/paul.ts`](./tool/paul.ts); the plugin entry
-[`src/index.ts`](./src/index.ts) re-exports it so both install paths share one source (no
-drift). Run the harness (no OpenCode agent loop / model endpoint required):
+The implementation is split into small single-responsibility modules in [`src/`](./src/):
+[`types.ts`](./src/types.ts) for the domain model, [`store.ts`](./src/store.ts) for the JSON
+store, [`ticket.ts`](./src/ticket.ts) for ticket rendering, [`scrub.ts`](./src/scrub.ts) for the
+name→role rewrite, and eleven thin tool files in [`src/tools/`](./src/tools/). The plugin
+entry is [`plugin.ts`](./plugin.ts). Run the harness (no OpenCode agent loop / model endpoint
+required):
 
 ```bash
-npm test          # node --experimental-strip-types scripts/verify.mjs
+npm test          # node --test --experimental-strip-types scripts/verify.mjs && node --test --experimental-strip-types test/*.test.ts
 ```
 
 It exercises all eleven tools plus the plugin registration, the ticket renderer, the doc
-indexing path and the name→role scrub against throwaway stores, and checks that the read-only
-doc-init prompt still names every forbidden write tool.
+indexing path and the name→role scrub against throwaway stores. The legacy harness
+([`scripts/verify.mjs`](./scripts/verify.mjs), 199 assertions) validates the full tool suite;
+per-module smoke tests live in [`test/`](./test/) using `node:test`.
 
 ## Notes & gotchas
 
@@ -595,6 +622,100 @@ doc-init prompt still names every forbidden write tool.
   run — if it ever disagrees with `paul.env`, the block is stale and a re-run fixes it.
 - A board scope that cannot be resolved is a hard error, and so is an unknown `PAUL_PROFILE`.
   Neither falls back to something broader; that fallback is what points a run at the wrong tickets.
+
+## Tested / recommended setup
+
+The exact OpenCode setup this repository is developed and tested against. Every plugin, MCP
+server, skill and tool below is running in the author's daily driver — copy it wholesale and you
+get the same stack, down to the model.
+
+### Model
+
+`deepseek/deepseek-v4-flash` ("DeepSeek V4 Flash") via the DeepSeek provider, keyed from the
+environment (`{env:DEEPSEEK_API_KEY}`, exported from `~/.config/opencode/deepseek.env`):
+
+```json
+{
+  "model": "deepseek/deepseek-v4-flash",
+  "provider": {
+    "deepseek": {
+      "options": { "apiKey": "{env:DEEPSEEK_API_KEY}" },
+      "models": { "deepseek-v4-flash": { "name": "DeepSeek V4 Flash" } }
+    }
+  }
+}
+```
+
+### Plugins (`~/.config/opencode/opencode.json`)
+
+| Plugin | Version | What it does |
+|--------|---------|--------------|
+| `./plugins/caveman/plugin.js` | 0.1.0 | Terse-response mode tracker + `/caveman*` slash commands (mode on by default). |
+| `context-mode` | 1.0.169 | Sandbox + knowledge base — `ctx_*` tools (execute, search, index, fetch) that keep raw bytes out of context. |
+| `opencode-mem0-selfhost` | 0.1.7 | Persistent AI memory against the self-hosted Mem0 REST backend at `http://localhost:8888` (no cloud SDK, no telemetry). |
+| `opencode-paul` | 0.1.0 | **This repo** — the eleven `paul_*` tools (Jira/Confluence project memory). |
+| `./plugins/rtk.ts` | 0.45.0 | Command proxy — auto-rewrites `bash` calls through `rtk` to filter output before it reaches the model. |
+
+### MCP servers
+
+| Server | Status | Command | Backend |
+|--------|--------|---------|---------|
+| `codebase-memory-mcp` | enabled | `codebase-memory-mcp` (0.9.0) | local code-knowledge graph, per-repo indexes |
+| `firecrawl` | enabled | `npx -y firecrawl-mcp` | self-hosted Firecrawl at `http://localhost:3002` |
+| `mcp-atlassian-robo` | enabled | `uvx mcp-atlassian` | Jira + Confluence (robofootball.atlassian.net) |
+| `mcp-atlassian` | disabled | `uvx mcp-atlassian` | personal tenant (karl-augustin-jahnel.atlassian.net) |
+| `mcp-atlassian-test` | disabled | `uvx mcp-atlassian` | same personal tenant, test token |
+
+Atlassian tokens are referenced as `{env:ATLASSIAN_API_TOKEN*}`, never inline. Only one
+Atlassian server is enabled at a time so a session can never read/decide against the wrong site.
+
+### Skills
+
+- **caveman family** — `caveman`, `caveman-commit`, `caveman-compress`, `caveman-help`,
+  `caveman-review`, `caveman-stats`.
+- **firecrawl family** (symlinked from `~/.agents/skills/`) — ~30 skills: `firecrawl`, `firecrawl-search`,
+  `firecrawl-scrape`, `firecrawl-crawl`, `firecrawl-map`, `firecrawl-agent`, `firecrawl-deep-research`,
+  `firecrawl-developer-index`, `firecrawl-monitor`, `firecrawl-parse`, `firecrawl-qa`, and more.
+- **mem0 family** — `mem0` (SDK), `mem0-cli`, `mem0-integrate`, `mem0-oss-to-platform`,
+  `mem0-test-integration`, `mem0-vercel-ai-sdk`, plus the self-host plugin's ops skills
+  (`mem0-search`, `mem0-remember`, `mem0-scope`, `mem0-dream`, `mem0-forget`, `mem0-status`, ...).
+- **cavecrew** — `cavecrew-builder`, `cavecrew-investigator`, `cavecrew-reviewer` (delegation agents +
+  matching slash commands).
+- **codebase-memory** (`~/.claude/skills/`) — decision matrix for the code-graph MCP tools.
+- **i-have-adhd** — output shaping for a distractible reader.
+
+### Commands (`~/.config/opencode/commands/`)
+
+`caveman`, `caveman-commit`, `caveman-compress`, `caveman-help`, `caveman-review`, `caveman-stats`,
+`cavecrew-builder`, `cavecrew-investigator`, `cavecrew-reviewer`, and `rtk.ts`.
+
+### Agent behavior
+
+`~/.config/opencode/AGENTS.md` carries three injected blocks that steer the session:
+
+1. **Memory Router** — mem0 for general memory, PAUL for Jira/Confluence, and the rule for which.
+2. **PAUL project memory** (`paul-project-memory:*`) — installed/refreshed by `setup.sh`; the
+   workflow, ticket format, init protocol and AGENTSMEMORY sync.
+3. **Token efficiency** — decision rules that route code-structure queries to the code graph,
+   file analysis to the sandbox, web content to firecrawl, and multi-step I/O to batches.
+
+### Runtime versions
+
+| Component | Version |
+|-----------|---------|
+| opencode | 1.18.16 |
+| Node.js | 24.19.0 |
+| rtk | 0.45.0 |
+| codebase-memory-mcp | 0.9.0 |
+| context-mode | 1.0.169 |
+| opencode-mem0-selfhost | 0.1.7 |
+| uvx | 0.12.3 |
+| mem0 server | self-hosted, `http://localhost:8888`, auth disabled |
+| firecrawl | self-hosted, `http://localhost:3002` |
+
+### TUI (`~/.config/opencode/tui.json`)
+
+`ctrl+.` opens the command list; `super+shift+z` redoes input.
 
 ## License
 

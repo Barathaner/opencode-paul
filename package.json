@@ -1,16 +1,20 @@
 {
   "name": "opencode-paul",
   "version": "0.1.0",
-  "description": "PAUL — structured, per-project agent memory for OpenCode. Roadmap/Kanban state the agent can list, order, and keep in sync with Jira & Confluence.",
+  "description": "PAUL — Persistent Atlassian Understanding Logger: structured agent memory that turns meeting transcripts into Jira tickets and keeps roadmap/kanban state in sync with Jira & Confluence.",
   "keywords": [
     "opencode",
     "opencode-plugin",
     "agent-memory",
+    "meeting-logger",
+    "transcript",
+    "meeting-minutes",
     "roadmap",
     "kanban",
     "jira",
     "confluence",
-    "atlassian"
+    "atlassian",
+    "agile"
   ],
   "license": "MIT",
   "author": "Karl-Augustin Jahnel",
@@ -24,24 +28,30 @@
   },
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./tool": "./tool/paul.ts"
+    ".": "./plugin.ts"
   },
   "files": [
+    "plugin.ts",
     "src/",
-    "tool/",
     "scripts/",
     "prompts/",
     "docs/",
     "examples/",
     "setup.sh",
-    "process_meetings.sh",
     "AGENTS.snippet.md",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "tsconfig.json",
+    "package.json"
   ],
+  "bin": {
+    "paul-meetings": "scripts/paul-meetings",
+    "paul-init-docs": "scripts/paul-init-docs",
+    "paul-reorder": "scripts/paul-reorder"
+  },
   "scripts": {
-    "test": "node --experimental-strip-types scripts/verify.mjs"
+    "test": "node --test --experimental-strip-types scripts/verify.mjs && node --test --experimental-strip-types test/*.test.ts",
+    "test:smoke": "node --test --experimental-strip-types test/smoke.test.ts"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.0.0"
