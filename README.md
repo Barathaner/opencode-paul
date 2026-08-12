@@ -627,6 +627,10 @@ The exact OpenCode setup this repository is developed and tested against. Every 
 server, skill and tool below is running in the author's daily driver — copy it wholesale and you
 get the same stack, down to the model.
 
+### Transcriber Audio to transcript.json
+
+uses meetily as transcriber with Parakeet model
+
 ### Model
 
 `deepseek/deepseek-v4-flash` ("DeepSeek V4 Flash") via the DeepSeek provider, keyed from the
@@ -660,9 +664,7 @@ environment (`{env:DEEPSEEK_API_KEY}`, exported from `~/.config/opencode/deepsee
 |--------|--------|---------|---------|
 | `codebase-memory-mcp` | enabled | `codebase-memory-mcp` (0.9.0) | local code-knowledge graph, per-repo indexes |
 | `firecrawl` | enabled | `npx -y firecrawl-mcp` | self-hosted Firecrawl at `http://localhost:3002` |
-| `mcp-atlassian-robo` | enabled | `uvx mcp-atlassian` | Jira + Confluence (robofootball.atlassian.net) |
-| `mcp-atlassian` | disabled | `uvx mcp-atlassian` | personal tenant (karl-augustin-jahnel.atlassian.net) |
-| `mcp-atlassian-test` | disabled | `uvx mcp-atlassian` | same personal tenant, test token |
+| `mcp-atlassian` | disabled | `uvx mcp-atlassian` |
 
 Atlassian tokens are referenced as `{env:ATLASSIAN_API_TOKEN*}`, never inline. Only one
 Atlassian server is enabled at a time so a session can never read/decide against the wrong site.
