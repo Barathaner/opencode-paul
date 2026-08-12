@@ -87,23 +87,35 @@ export function renderPageBody(store: Store, roster: import("./types.ts").Roster
 
 export function extractStoreJson(pageBody: string): { version?: number; project?: string; cursor?: Store["cursor"]; entries: Entry[] } | null {
   if (!pageBody) return null
+
+  // Unwrap Confluence API JSON wrapper if present — the agent may pass the
+  // raw confluence_get_page response (which wraps the storage body in metadata).
+  let raw = pageBody
+  try {
+    const j = JSON.parse(pageBody)
+    const html = (j.metadata?.content?.value as string) || (j.content?.value as string)
+    if (html && typeof html === "string") raw = html
+  } catch {
+    // not JSON — already raw storage HTML, use as-is
+  }
+
   const candidates: string[] = []
 
   const cdataRe = /<!\[CDATA\[([\s\S]*?)\]\]>/g
   let m: RegExpExecArray | null
-  while ((m = cdataRe.exec(pageBody)) !== null) {
+  while ((m = cdataRe.exec(raw)) !== null) {
     if (m[1].includes('"entries"')) candidates.push(m[1])
   }
 
-  const s = pageBody.indexOf(JSON_START)
-  const e = pageBody.indexOf(JSON_END)
+  const s = raw.indexOf(JSON_START)
+  const e = raw.indexOf(JSON_END)
   if (s !== -1 && e !== -1 && e > s) {
-    const between = pageBody.slice(s + JSON_START.length, e)
+    const between = raw.slice(s + JSON_START.length, e)
     const cdata = between.match(/<!\[CDATA\[([\s\S]*?)\]\]>/)
     candidates.push(cdata ? cdata[1] : between.replace(/<[^>]+>/g, "").trim())
   }
 
-  const bare = pageBody.match(/\{[\s\S]*"entries"[\s\S]*\}/)
+  const bare = raw.match(/\{[\s\S]*"entries"[\s\S]*\}/)
   if (bare) candidates.push(bare[0])
 
   for (const c of candidates) {
