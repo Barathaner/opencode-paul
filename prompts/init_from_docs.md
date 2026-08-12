@@ -48,6 +48,11 @@ PHASE 1 — LOAD EXISTING MEMORY (pull first, so a re-run updates instead of dup
 - Call paul_list and paul_cursor (no args). Keep the result: it tells you which pages and issues are
   already indexed, at which `meta.version`, so you can skip work in PHASE 3 and so PHASE 4 updates
   entries in place rather than creating second copies of them.
+- IF THIS IS A RESET RUN (the MODE line below says "reset: true"): DELETE any stale cache files
+  from a previous subagent run. Run a shell command:
+  rm -f .paul/init-arc42.json .paul/init-meetings.json .paul/init-*.json
+  Do this BEFORE delegating to subagents, so they cannot version-match against the old run's
+  outputs. A full re-index means no cached summaries — every page is read fresh.
 
 PHASE 2 — PEOPLE ARE ROLES, NEVER NAMES (before you write anything):
 - Call paul_roles (no args) to read the role vocabulary and everyone already registered.
@@ -264,6 +269,11 @@ Jira — the project "{{JIRA_PROJECT}}"{{JIRA_SCOPE}}:
   the same tickets again, which is how a 130-ticket board gets reported as 300+. Instead: read
   next_page_token off the result and pass it back as page_token on the next call. When the result
   has no next_page_token, you have the whole set — that, not an empty page, is the end signal.
+- GUARDRAIL: if the first jira_search call returns fewer than 100 issues (the limit) AND the
+  JIRA_EXPECTED count from the prompt is much larger, the pagination may have stopped early.
+  In that case, make ONE additional call with start_at: 0 (ignored on Cloud, but harmless) to
+  confirm whether there really are only those results. Report the mismatch in coverage if the
+  numbers still disagree.
 - total in the response is -1 on Cloud and means "not reported". It is not a count, not an error,
   and not a reason to keep searching.
 - Full descriptions: call jira_get_issue ONLY for issues whose mapped status is backlog, todo or
