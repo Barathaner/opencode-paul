@@ -1,6 +1,4 @@
-# opencode-paul
-
-**PAUL** — **P**ersistent (**memory**), **A**tlassian, **U**nderstanding, (**meeting**) **L**ogger.
+# PAUL — Persistent (memory), Atlassian, Understanding, (meeting) Logger.
 
 Structured per-project agent memory for [OpenCode](https://opencode.ai): turn meeting
 transcripts into Jira tickets, keep roadmap / Kanban state truthful across sessions,
