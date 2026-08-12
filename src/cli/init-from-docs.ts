@@ -212,7 +212,8 @@ async function main() {
   log(`Jira scope: ${jiraExpected} issues match that search`, logFile)
   log(`PAUL store: ${cfg.projectDir}/.paul/memory.json`, logFile)
   log(`Read-only: no Jira issue and no Confluence page other than ${cfg.agentsMemoryTitle} will be written.`, logFile)
-  log(`Invoking OpenCode CLI (${opencodeBin})...`, logFile)
+  const timeoutMs = process.env.PAUL_INIT_TIMEOUT_MS ? parseInt(process.env.PAUL_INIT_TIMEOUT_MS, 10) : 1_800_000
+  log(`Invoking OpenCode CLI (${opencodeBin}) with timeout ${timeoutMs / 1000}s...`, logFile)
 
   if (cfg.roles) process.env.PAUL_ROLES = cfg.roles
 
@@ -222,6 +223,7 @@ async function main() {
     cwd: cfg.projectDir,
     overlay,
     logFile,
+    timeoutMs,
   })
 
   if (result.exitCode === 0) {
