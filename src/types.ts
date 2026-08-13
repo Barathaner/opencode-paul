@@ -21,7 +21,7 @@ export type TicketSpec = {
   complexity?: string          // Low | Medium | High
   priority?: string            // Low | Medium | High | Critical
   timeEstimate?: string        // Jira-style, e.g. 2h, 1d, 3d
-  context?: string             // why this exists — facts from the meeting
+  explanation?: string         // full record of everything the transcript said about this item
   background?: BackgroundRef[] // optional; related PAUL memory docs/entries found by paul_list, not the meeting
   goal?: string                // one sentence definition of done
   approach?: string[]          // numbered plan; derived when the meeting did not state it

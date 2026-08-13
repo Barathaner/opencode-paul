@@ -355,7 +355,7 @@ What each run does, in order:
 3. **Meeting notes** — creates a `Meeting Notes: <date>` Confluence page in your space with
    the overview, key decisions and action items. The verbatim transcript is not uploaded.
 4. **Action items → Jira, standard format, deduped** — extracts action items, builds a
-   ticket spec for each (context, goal, a numbered approach, acceptance criteria, complexity,
+   ticket spec for each (explanation, goal, a numbered approach, acceptance criteria, complexity,
    priority, estimate), renders it through `paul_ticket_body` and sends that body to Jira
    verbatim. Only *new* tickets are created. (Without PAUL, the old script re-created the same
    tickets on every run.) A ticket PAUL already tracks is **left alone in Jira** — its description

@@ -18,9 +18,12 @@ Output is Markdown; `mcp-atlassian` converts it to ADF for Jira Cloud.
 ```markdown
 Complexity: Medium | Priority: High | Estimate: 1d
 
-## Context
-Login breaks for SSO users since the Okta migration.
-Blocks onboarding of the new client.
+## Explanation
+Login breaks for SSO users since the Okta migration — the Backend Developer reproduced the 500
+on the Okta callback and traced it to the state/nonce handler. Blocks onboarding of the new
+client, which is next sprint's Critical. The Product Owner asked that the password fallback be
+removed from /login, not just patched. The callback flow used here is the same auth-boundary the
+encryption fix in ADR-010 touched, so the handler changes must stay compatible with it.
 
 ## Background
 - ADR-010: Encryption vs Mapping Table (<confluence url>) — same auth-boundary area as this fix.
@@ -60,7 +63,7 @@ Meeting Notes: 2026-08-10 (<confluence url>)
 | `complexity` | `Low \| Medium \| High` | yes | implementation effort / uncertainty |
 | `priority` | `Low \| Medium \| High \| Critical` | yes | business urgency; drives PAUL `order` and the board rank |
 | `timeEstimate` | string | yes | Jira-style, e.g. `2h`, `1d`, `3d` |
-| `context` | string | yes | why this exists — background and facts from the meeting |
+| `explanation` | string | yes | the full detail record for this ticket — every fact, constraint, agreed acceptance criterion, requirement, decision, objection, example, architecture note, listing, or question for a scheduled meeting the transcript said about this item, stated fully and never compressed. Names appear as roles. Details are cross-linked to the `background` refs. |
 | `background` | `{title, url, note}[]` | yes | at most 3 related docs/entries found via `paul_list(type="doc")`; genuine topical matches only. The check itself is required every time — pass an explicit `[]` when nothing is genuinely relevant. Omitting the field entirely means the check was skipped and is flagged in `missing`. |
 | `goal` | string | yes | one sentence: what "done" means |
 | `approach` | string[] | yes | numbered plan, one bounded action per step |
@@ -71,12 +74,36 @@ Meeting Notes: 2026-08-10 (<confluence url>)
 | `derived` | string[] | no | which fields PAUL proposed rather than took from the meeting |
 
 No owner or assignee field exists, by design — PAUL never assigns tickets. People referred to in
-`context`, `goal` or anywhere else are named by their **project role**, never their real name; the
+`explanation`, `goal` or anywhere else are named by their **project role**, never their real name; the
 renderer scrubs any name it recognises. See [`ROLES.md`](./ROLES.md).
+
+## Explanation: the transcript record
+
+`explanation` is the one field that is deliberately *not* a summary. It is the full detail record
+of everything the meeting said about this ticket: facts, constraints, agreed acceptance criteria,
+requirements, decisions, objections, examples, architecture notes, listings, questions for a
+scheduled meeting — anything the transcript says about the item, stated fully and never compressed
+away. If the meeting spelled out acceptance criteria, they appear here even though they also land
+in `acceptanceCriteria`. The ticket may never have been named a ticket at all — an action item or
+todo that emerged from project discussion is still a ticket, and everything said about it goes here.
+
+Two boundaries keep it from swallowing the whole meeting:
+
+- **About this item only.** General project talk not about this ticket belongs on the meeting
+  notes page (PHASE 1), not here. The notes page is the overview; the explanation is the full
+  record; they are allowed to differ in detail.
+- **Connected to `background`, not free-floating.** Each detail is cross-linked to the
+  reference that bears on it (e.g. "the approach the Backend Developer described is the one
+  ADR-010 fixes"), so a reader can see which transcript fact is anchored to which standing doc.
+
+The agent is told to re-scan the transcript before finalizing and confirm every statement about
+the item appears in `explanation`. Legacy specs stored before format v4 under the `context` key
+render their content under this section unchanged — the fallback means no existing ticket loses
+text when re-rendered.
 
 ## Filling it in: derive, do not blank
 
-The three attributes plus `context`, `goal` and `source` come straight from the meeting. `approach`
+The three attributes plus `explanation`, `goal` and `source` come straight from the meeting. `approach`
 and `acceptanceCriteria` usually do **not** — people agree on *what* and skip *how*.
 
 When they are missing, the agent works the task out and writes the plan it would follow itself,
@@ -112,7 +139,8 @@ already in memory for genuine topical overlap with the action item (same subsyst
 area), caps it at 3 references, and passes an explicit `[]` when nothing is a real match rather
 than forcing a reference or omitting the field. A background reference is read as context, not as
 settled fact, unless the referenced doc itself states a decision — the renderer adds a line making
-that explicit.
+that explicit. The `explanation` section connects its transcript details to these refs by name, so
+the background list is not decoration: each ref is anchored to the detail it supports.
 
 ## How it is used
 

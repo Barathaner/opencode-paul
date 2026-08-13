@@ -17,7 +17,19 @@ PHASE 0 — LOAD MEMORY (pull first, before doing anything else):
   — storage format, deliberately: the machine state is a CDATA block that markdown conversion
   would mangle. Pass ONLY page_id and convert_to_markdown — never fields/expand/other args
   (mcp-atlassian's get_page accepts neither and will reject the call). Then
-  paul_import_page(pageBody=<body>, pageId=<id>, spaceKey="{{CONFLUENCE_SPACE}}") to merge remote -> local.
+  paul_import_page(pageId=<id>, spaceKey="{{CONFLUENCE_SPACE}}") with the storage body to merge
+  remote -> local.
+- The page is LARGE, so get_page will not return the body inline: mcp-atlassian saves the full
+  response JSON to a file under ~/.local/share/opencode/tool-output/, which is OUTSIDE this
+  workspace. Handle that file with bash/Read, NOT ctx tools (the context-mode sandbox confines
+  ctx_execute_file to the workspace and will reject it). The storage body sits at JSON key
+  metadata.content.value (content.value only on small inline responses). Extract it to a file
+  INSIDE the workspace and pass pageBodyPath:
+    1. mkdir -p .paul
+    2. python3 -c "import json,sys;d=json.load(open(sys.argv[1]));open('.paul/remote-body.xml','w').write(d['metadata']['content']['value'])" <tool-output-file>
+    3. paul_import_page(pageBodyPath=".paul/remote-body.xml", pageId=<id>, spaceKey="{{CONFLUENCE_SPACE}}")
+  If the body came back inline instead, just call paul_import_page(pageBody=<body>, ...). Never
+  hand-edit the JSON block — it is what makes the next pull lossless.
 - Call paul_list(brief: true) and paul_cursor (no args) to load existing meetings, tickets, and
   the current roadmap phase. You will use this to AVOID creating duplicate Jira
   tasks for action items that already exist. brief mode omits meta.spec/details
@@ -61,7 +73,9 @@ PHASE 1 — MEETING NOTES PAGE:
   Remember the returned pageId and page URL.
 
 PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PAUL):
-- Extract every action item from the transcript.
+- Extract every action item from the transcript. An action item is not always named as one —
+  it often emerges as an implicit todo from discussion (agree to do X, decide Y, follow up on
+  W). Capture those. Do not ticket general information; that belongs on the notes page.
 - Call paul_list(type="doc") ONCE for this whole phase (already local — synced from AGENTSMEMORY
   in PHASE 0, no extra Confluence call). This is the standing knowledge (specs/ADRs/architecture
   docs) already in memory. If it returns no entries, pass background: [] for every ticket below
@@ -72,8 +86,26 @@ PHASE 2 — ACTION ITEMS -> JIRA (standard format, enriched + deduped against PA
   * complexity:         Low | Medium | High (implementation effort / uncertainty).
   * priority:           Low | Medium | High | Critical (business urgency).
   * timeEstimate:       Jira-style string, e.g. "2h", "1d", "3d".
-  * context:            why this exists — the background and facts from the transcript.
-                        Name people by ROLE only, e.g. "the Backend Developer raised this".
+  * explanation:        THE FULL DETAIL RECORD for this item — everything the meeting said about
+                        this todo/action item/task. Never a summary, never compressed — if the
+                        transcript mentions it in ten places, all ten go in. Include all of:
+                        facts and constraints stated about it; agreed acceptance criteria and
+                        requirements (repeat them here even though they also go into
+                        acceptanceCriteria); decisions, objections, and the reasoning given;
+                        examples, architecture notes, listings, questions for a scheduled
+                        meeting; anything else said about this item.
+                        BOUNDARY: only what was said ABOUT THIS ITEM. General project talk not
+                        about this item belongs on the notes page (PHASE 1) — the notes page is
+                        the overview, the explanation is the full record, and they are allowed
+                        to differ in detail.
+                        The item may never have been called a ticket — an action item/todo that
+                        emerged from project discussion is still a ticket. Name people by ROLE
+                        only, e.g. "the Backend Developer raised this".
+                        Then CONNECT these details to the background refs: for each relevant
+                        ref, name which detail it supports (e.g. "the approach the Backend
+                        Developer described is the one ADR-010 fixes").
+                        SELF-CHECK: before finalizing, re-scan the transcript for every
+                        statement about this item and confirm each one appears in explanation.
   * background:         REQUIRED CHECK, at most 3 entries. Scan the paul_list(type="doc") titles/summaries
                         from the step above for genuine topical overlap with THIS action item (same
                         subsystem, same component, same ADR area) — not a keyword coincidence. For
@@ -132,7 +164,7 @@ PHASE 3 — RECORD INTO PAUL (with priority-driven order):
                status: "<backlog|todo|in_progress|blocked|review|done>", order: <computed order>,
                issueType: "Task", url: "<issue url>",
                plus THE WHOLE SPEC you passed to paul_ticket_body: complexity, priority,
-               timeEstimate, context, background, goal, approach, acceptanceCriteria, outOfScope,
+               timeEstimate, explanation, background, goal, approach, acceptanceCriteria, outOfScope,
                dependencies, source, derived } ]
     (complexity/priority/timeEstimate drive board ordering; the full spec is stored in
      meta.spec so any later run can re-render the exact same description without

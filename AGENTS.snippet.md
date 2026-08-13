@@ -56,7 +56,7 @@ returned `description` verbatim to `jira create_issue` / `jira update_issue`.
 | `complexity` | yes | Low \| Medium \| High — effort/uncertainty |
 | `priority` | yes | Low \| Medium \| High \| Critical — business urgency |
 | `timeEstimate` | yes | Jira-style, e.g. 2h, 1d, 3d |
-| `context` | yes | why this exists — background/facts from the meeting |
+| `explanation` | yes | the full detail record for this ticket — everything the meeting said about it (facts, constraints, agreed acceptance criteria, requirements, decisions, objections, examples, architecture notes, listings, questions for a scheduled meeting), stated fully and never summarized; names as roles; each detail connected to the relevant `background` ref. The item need not have been named a ticket — an action item/todo from project talk is one too |
 | `background` | yes | at most 3 `{title, url, note}` refs to related docs found via `paul_list(type="doc")` — genuine topical matches only, never forced. The check is required every time: pass an explicit `[]` when nothing relevant is found; omitting the field entirely means the check was skipped and is flagged in `missing` |
 | `goal` | yes | one sentence: what "done" means |
 | `approach` | yes | numbered plan, one bounded action per step |
@@ -139,9 +139,15 @@ PULL FIRST — at the START of any task touching Confluence or Jira:
    with cql `title = "AGENTSMEMORY"` to find it.
 2. If the page exists: `confluence_get_page(page_id, convert_to_markdown: false)` — storage
    format, the only call that should ask for it, because the machine state is a CDATA block
-   markdown conversion would mangle. Then
-   `paul_import_page(pageBody=<body>, pageId=<id>, spaceKey=<KEY>)`. This merges
-   remote → local (newer updatedAt wins per entry and for the cursor).
+   markdown conversion would mangle. The page is LARGE, so get_page saves the response JSON to
+   a file under `~/.local/share/opencode/tool-output/` (OUTSIDE this workspace — use bash/Read,
+   not ctx tools, which the context-mode sandbox confines to the workspace). Extract the storage
+   body from JSON key `metadata.content.value` (`content.value` only on small inline responses)
+   into the workspace, then `paul_import_page(pageBodyPath=".paul/remote-body.xml", pageId=<id>, spaceKey=<KEY>)`:
+   - `mkdir -p .paul`
+   - `python3 -c "import json,sys;d=json.load(open(sys.argv[1]));open('.paul/remote-body.xml','w').write(d['metadata']['content']['value'])" <tool-output-file>`
+   - `paul_import_page(pageBodyPath=".paul/remote-body.xml", pageId=<id>, spaceKey=<KEY>)`
+   This merges remote → local (newer updatedAt wins per entry and for the cursor).
 3. If the page does NOT exist yet, skip the pull.
 
 PUSH AFTER — whenever you change local memory (paul_add/update/remove/cursor/init):

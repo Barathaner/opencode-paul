@@ -13,7 +13,12 @@ const SPEC_ARGS = {
   complexity: S.string().optional().describe("Implementation effort/uncertainty: Low | Medium | High"),
   priority: S.string().optional().describe("Business urgency: Low | Medium | High | Critical"),
   timeEstimate: S.string().optional().describe("Effort estimate, e.g. 2h, 1d, 3d"),
-  context: S.string().optional().describe("Why this exists \u2014 background and facts from the meeting"),
+  explanation: S.string().optional().describe(
+    "The full record of everything the transcript said about this todo/action item/task " +
+    "\u2014 never summarized. Include every fact, constraint, agreed acceptance criterion, " +
+    "requirement, decision, objection, example, architecture note, listing, or question for a " +
+    "scheduled meeting said about this item. Name people by ROLE. Then connect these details " +
+    "to the background refs, naming which reference supports which detail."),
   background: S.array(S.object({
     title: S.string().describe("Title of the related PAUL memory doc/entry"),
     url: S.string().optional().describe("Link to the reference, when known"),
@@ -87,7 +92,7 @@ export const init = tool({
       ...SPEC_ARGS,
     })).optional().describe(
       "Jira tickets to store as roadmap/board entries. Pass the standard ticket-format fields " +
-      "(context/goal/approach/acceptanceCriteria/... \u2014 see paul_ticket_body) so the structured spec " +
+      "(explanation/goal/approach/acceptanceCriteria/... \u2014 see paul_ticket_body) so the structured spec " +
       "is stored in meta.spec and the body can be re-rendered identically later."),
     mergePaths: S.array(S.string()).optional().describe(
       "Paths to JSON files whose contents are merged into this call, each holding one object " +

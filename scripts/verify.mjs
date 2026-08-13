@@ -227,7 +227,7 @@ rmSync(DIR9, { recursive: true, force: true })
 // 5) Standard ticket format: rendering, validation, persistence.
 const FULL_SPEC = {
   complexity: "Medium", priority: "High", timeEstimate: "1d",
-  context: "Login breaks for SSO users.", goal: "SSO users can log in.",
+  explanation: "Login breaks for SSO users.", goal: "SSO users can log in.",
   approach: ["Reproduce the 500.", "Fix the callback."],
   acceptanceCriteria: ["Callback returns a session", "Fallback removed"],
   outOfScope: "SCIM provisioning.", dependencies: ["KAN-12", "KAN-13"],
@@ -236,7 +236,7 @@ const FULL_SPEC = {
 const render = async (spec, c = ctx) => J(await P.ticket_body.execute(spec, c))
 
 const full = await render({ ...FULL_SPEC, derived: ["approach"] })
-const SECTIONS = ["Complexity: Medium | Priority: High | Estimate: 1d", "## Context", "## Goal",
+const SECTIONS = ["Complexity: Medium | Priority: High | Estimate: 1d", "## Explanation", "## Goal",
   "## Proposed approach", "## Acceptance criteria", "## Out of scope", "## Dependencies", "## Source"]
 const at = SECTIONS.map((s) => full.description.indexOf(s))
 ok(at.every((i) => i !== -1) && at.every((i, k) => k === 0 || i > at[k - 1]),
@@ -244,6 +244,12 @@ ok(at.every((i) => i !== -1) && at.every((i, k) => k === 0 || i > at[k - 1]),
 ok(full.missing.length === 0, "ticket_body: complete spec reports no missing fields")
 ok(full.description.includes("1. Reproduce the 500.\n2. Fix the callback."),
   "ticket_body: approach rendered as a numbered plan")
+
+// Stored specs can carry their own "1. " prefixes; the renderer must not double-number.
+const numberedSteps = await render({ ...FULL_SPEC, approach: ["1. Reproduce the 500.", "2. Fix the callback."] })
+ok(numberedSteps.description.includes("1. Reproduce the 500.\n2. Fix the callback.") &&
+   !numberedSteps.description.includes("1. 1.") && !numberedSteps.description.includes("2. 2."),
+  "ticket_body: redundant leading numbers in approach items are stripped (no double numbering)")
 ok(full.description.includes("- [ ] Callback returns a session"),
   "ticket_body: acceptance criteria rendered as checkboxes")
 ok(full.description.includes("KAN-12, KAN-13"), "ticket_body: dependencies joined")
@@ -273,11 +279,11 @@ const withBg = await render({ ...FULL_SPEC, background: [
   { title: "ADR-010: Encryption vs Mapping Table", url: "https://x/wiki/1", note: "same auth-boundary area" },
   { title: "No note here", note: "" },
 ] })
-const ctxAt = withBg.description.indexOf("## Context")
+const ctxAt = withBg.description.indexOf("## Explanation")
 const bgAt = withBg.description.indexOf("## Background")
 const goalAt = withBg.description.indexOf("## Goal")
 ok(ctxAt !== -1 && bgAt !== -1 && goalAt !== -1 && ctxAt < bgAt && bgAt < goalAt,
-  "ticket_body: Background section renders between Context and Goal")
+  "ticket_body: Background section renders between Explanation and Goal")
 ok(withBg.description.includes("- ADR-010: Encryption vs Mapping Table (https://x/wiki/1) — same auth-boundary area"),
   "ticket_body: background ref renders title, url and note")
 ok(!withBg.description.includes("No note here"),
@@ -286,11 +292,20 @@ ok(withBg.description.includes("_Related memory found by PAUL"),
   "ticket_body: background section carries the 'not a decision' disclaimer")
 
 const sparse = await render({ complexity: "Low", priority: "Low", timeEstimate: "2h",
-  context: "c", goal: "g", source: "s" })
+  explanation: "c", goal: "g", source: "s" })
 ok(sparse.missing.join(",") === "approach,acceptanceCriteria,background",
   `ticket_body: reports exactly the empty required fields (got ${sparse.missing.join(",")})`)
 ok((sparse.description.match(/_Needs clarification/g) || []).length === 3,
   "ticket_body: empty required fields (including unchecked background) render a needs-clarification marker")
+
+// A pre-v4 spec stored the same content under `context`; it must render under the new
+// Explanation section and not be re-flagged as missing (no existing ticket loses text).
+const legacy = await render({ complexity: "Medium", priority: "Medium", timeEstimate: "2h",
+  context: "Legacy SSO detail from an old spec.", goal: "g", source: "s" })
+ok(legacy.description.includes("## Explanation\nLegacy SSO detail from an old spec."),
+  "ticket_body: legacy `context` content renders under the Explanation section")
+ok(!legacy.missing.includes("explanation"),
+  "ticket_body: legacy `context` satisfies the required explanation check")
 
 // entryId persists the structured spec onto an entry (own store — keeps DIR counts stable).
 const DIR3 = "/tmp/opencode-paul-verify3"
@@ -299,7 +314,7 @@ const ctx3 = { worktree: DIR3, directory: DIR3 }
 const target = J(await P.add.execute({ type: "ticket", title: "T" }, ctx3)).added
 await P.ticket_body.execute({ ...FULL_SPEC, entryId: target.id }, ctx3)
 const stored = J(readFileSync(DIR3 + "/.paul/memory.json", "utf8")).entries[0].meta.spec
-ok(stored.goal === FULL_SPEC.goal && stored.approach.length === 2 && stored.specVersion === 3,
+ok(stored.goal === FULL_SPEC.goal && stored.approach.length === 2 && stored.specVersion === 4,
   "ticket_body: entryId persists the spec to meta.spec")
 ok(J(await P.ticket_body.execute({ goal: "g", entryId: "nope" }, ctx3)).error !== undefined,
   "ticket_body: unknown entryId reports an error")
@@ -309,7 +324,7 @@ rmSync(DIR3, { recursive: true, force: true })
 await P.init.execute({ tickets: [{ externalId: "KAN-5", title: "T", issueType: "Epic", ...FULL_SPEC }] }, ctx)
 await P.init.execute({ tickets: [{ externalId: "KAN-5", title: "T", goal: "Narrower goal." }] }, ctx)
 const specced = J(await P.list.execute({}, ctx)).entries.find((e) => e.meta.externalId === "KAN-5")
-ok(specced.meta.spec.goal === "Narrower goal." && specced.meta.spec.context === FULL_SPEC.context,
+ok(specced.meta.spec.goal === "Narrower goal." && specced.meta.spec.explanation === FULL_SPEC.explanation,
   "init: spec stored in meta.spec, partial re-init merges field by field")
 
 // A ticket imported without a spec: the mirror must flag it as unsolvable-as-written.
@@ -375,12 +390,12 @@ ok(!hasName(J(await P.update.execute({ id: added4.id, title: "KJ retries", detai
   "update: scrubs title and details")
 
 const tb = J(await P.ticket_body.execute(
-  { ...FULL_SPEC, context: "Karl found it", goal: "Sarah signs off" }, ctx4))
+  { ...FULL_SPEC, explanation: "Karl found it", goal: "Sarah signs off" }, ctx4))
 ok(!hasName(tb.description) && tb.scrubbed.length === 2,
   "ticket_body: scrubs the spec before rendering and reports the swaps")
 
 const ini = J(await P.init.execute({
-  tickets: [{ externalId: "KAN-7", title: "Karl task", context: "KJ said so" }],
+  tickets: [{ externalId: "KAN-7", title: "Karl task", explanation: "KJ said so" }],
   meetings: [{ externalId: "pg7", title: "Sync", summary: "Sarah spoke" }],
 }, ctx4))
 ok(ini.scrubbed.length > 0 && !hasName(mem4()), "init: scrubs everything imported, no name reaches the store")

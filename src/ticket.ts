@@ -3,11 +3,11 @@ import type { TicketSpec } from "./types.ts"
 
 const S = tool.schema
 
-export const TICKET_FORMAT_VERSION = 3
+export const TICKET_FORMAT_VERSION = 4
 
 export const REQUIRED_SPEC_FIELDS = [
   "complexity", "priority", "timeEstimate",
-  "context", "goal", "approach", "acceptanceCriteria", "source", "background",
+  "explanation", "goal", "approach", "acceptanceCriteria", "source", "background",
 ] as const
 
 export const NEEDS_CLARIFICATION = "_Needs clarification \u2014 not stated in the meeting._"
@@ -25,6 +25,9 @@ export function isBlank(v: unknown): boolean {
 export function validateSpec(spec: TicketSpec): string[] {
   return REQUIRED_SPEC_FIELDS.filter((f) => {
     if (f === "background") return spec.background === undefined
+    // Legacy specs store the same content under `context`; treat it as satisfying
+    // `explanation` so old tickets are not re-flagged as needing detail.
+    if (f === "explanation") return isBlank(spec.explanation) && isBlank(spec.context)
     return isBlank(spec[f])
   }).map(String)
 }
@@ -47,7 +50,7 @@ export function renderTicketDescription(spec: TicketSpec): string {
     ` | Estimate: ${spec.timeEstimate?.trim() || UNSET}`,
   )
 
-  out.push("", "## Context", spec.context?.trim() || NEEDS_CLARIFICATION)
+  out.push("", "## Explanation", spec.explanation?.trim() || spec.context?.trim() || NEEDS_CLARIFICATION)
 
   out.push("", "## Background")
   if (spec.background === undefined) {
@@ -69,7 +72,9 @@ export function renderTicketDescription(spec: TicketSpec): string {
   out.push("", "## Goal", spec.goal?.trim() || NEEDS_CLARIFICATION)
 
   out.push("", "## Proposed approach")
-  const steps = items(spec.approach)
+  // Stored specs sometimes carry their own "1. " prefixes; the renderer numbers the list
+  // itself, so strip any redundant leading "N. " / "N) " to avoid "1. 1. ...".
+  const steps = items(spec.approach).map((s) => s.replace(/^\s*\d+[.)]\s*/, ""))
   if (steps.length) {
     steps.forEach((s, i) => out.push(`${i + 1}. ${s}`))
     if (derived.includes("approach")) out.push("", derivedNote("Approach"))
@@ -98,13 +103,15 @@ export function renderTicketDescription(spec: TicketSpec): string {
 
 export function specFrom(src: Record<string, unknown>): TicketSpec | undefined {
   const spec: Record<string, unknown> = {}
-  for (const k of ["complexity", "priority", "timeEstimate", "context", "goal",
+  for (const k of ["complexity", "priority", "timeEstimate", "explanation", "goal",
                    "approach", "acceptanceCriteria", "outOfScope", "dependencies", "source", "derived"]) {
     if (!isBlank(src[k])) spec[k] = src[k]
   }
   if (Object.prototype.hasOwnProperty.call(src, "background") && Array.isArray(src.background)) {
     spec.background = src.background
   }
+  // Legacy migration: pre-v4 specs stored this content under `context`.
+  if (isBlank(spec.explanation) && !isBlank(src.context)) spec.explanation = src.context
   if (!Object.keys(spec).length) return undefined
   return { ...spec, specVersion: TICKET_FORMAT_VERSION } as TicketSpec
 }
@@ -126,7 +133,14 @@ export const SPEC_ARGS = {
   complexity: S.string().optional().describe("Implementation effort/uncertainty: Low | Medium | High"),
   priority: S.string().optional().describe("Business urgency: Low | Medium | High | Critical"),
   timeEstimate: S.string().optional().describe("Effort estimate, e.g. 2h, 1d, 3d"),
-  context: S.string().optional().describe("Why this exists \u2014 background and facts from the meeting"),
+  explanation: S.string().optional().describe(
+    "The full record of everything the transcript said about this todo/action item/task " +
+    "\u2014 never summarized, never compressed away. Include every fact, constraint, agreed " +
+    "acceptance criterion, requirement, decision, objection, example, architecture note, " +
+    "listing, or question for a scheduled meeting that was said about this item. The item may " +
+    "never have been named a ticket \u2014 an action item/todo that emerged from project talk is " +
+    "still a ticket. Name people by ROLE only. Then CONNECT these transcript details to the " +
+    "background refs, naming which reference supports which detail."),
   background: BACKGROUND_ARG,
   goal: S.string().optional().describe("One sentence describing what 'done' means"),
   approach: S.array(S.string()).optional().describe(

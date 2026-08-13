@@ -42,8 +42,15 @@ PHASE 1 — LOAD EXISTING MEMORY (pull first, so a re-run updates instead of dup
   confluence_search with cql: title = "{{AGENTSMEMORY_TITLE}}" AND space = "{{CONFLUENCE_SPACE}}".
 - If the page exists: confluence_get_page(page_id=<id>, convert_to_markdown: false) — storage
   format, deliberately, and the ONLY call in this run that asks for it. PAUL's machine state is
-  embedded in that page as a CDATA block and markdown conversion would mangle it. Then
-  paul_import_page(pageBody=<body>, pageId=<id>, spaceKey="{{CONFLUENCE_SPACE}}").
+  embedded in that page as a CDATA block and markdown conversion would mangle it. The page is
+  LARGE, so get_page saves the response JSON to a file under ~/.local/share/opencode/tool-output/
+  (OUTSIDE this workspace — handle it with bash/Read, not ctx tools, which the context-mode
+  sandbox confines to the workspace). The storage body is at JSON key metadata.content.value
+  (content.value only on small inline responses). Extract it INSIDE the workspace, then
+  paul_import_page(pageBodyPath=".paul/remote-body.xml", pageId=<id>, spaceKey="{{CONFLUENCE_SPACE}}"):
+    1. mkdir -p .paul
+    2. python3 -c "import json,sys;d=json.load(open(sys.argv[1]));open('.paul/remote-body.xml','w').write(d['metadata']['content']['value'])" <tool-output-file>
+    3. paul_import_page(pageBodyPath=".paul/remote-body.xml", pageId=<id>, spaceKey="{{CONFLUENCE_SPACE}}")
 - If it does not exist yet, skip the pull.
 - Call paul_list and paul_cursor (no args). Keep the result: it tells you which pages and issues are
   already indexed, at which `meta.version`, so you can skip work in PHASE 3 and so PHASE 4 updates
@@ -378,8 +385,8 @@ Ticket `order` (lower = higher on the board): rank by priority first (Critical <
 Low), then by complexity/estimate as a tiebreak, respecting stated dependencies. Assign ascending
 values (10, 20, 30, ...). Only rank tickets in backlog/todo; leave the rest at their existing order.
 
-On ticket specs: if an existing Jira description already states the standard fields (context, goal,
-approach, acceptance criteria, complexity, priority, estimate), pass them through so they land in
+On ticket specs: if an existing Jira description already states the standard fields (explanation,
+goal, approach, acceptance criteria, complexity, priority, estimate), pass them through so they land in
 meta.spec. Where you inferred a field rather than read it, name it in derived[]. Do NOT invent an
 approach or acceptance criteria for a ticket nobody has specified — an unspecified ticket should
 stay visibly unspecified in the mirror, which is exactly what the "needs detail" flag is for.

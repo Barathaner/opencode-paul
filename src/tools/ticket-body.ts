@@ -13,7 +13,11 @@ export const ticket_body = tool({
     "report which required fields are still missing. Call this for EVERY Jira issue you create or update " +
     "and pass the returned 'description' VERBATIM to jira create_issue / update_issue \u2014 never hand-write " +
     "a description, so every ticket has the same shape. Required: complexity, priority, timeEstimate, " +
-    "context, goal, approach, acceptanceCriteria, source, background. If the meeting did not state the " +
+    "explanation, goal, approach, acceptanceCriteria, source, background. explanation is the FULL " +
+    "DETAIL RECORD for the ticket \u2014 every fact, constraint, agreed acceptance criterion, requirement, " +
+    "decision, objection, example, architecture note, listing, or question for a scheduled meeting that " +
+    "the meeting said about this item, stated fully and never summarized, names as roles, with each " +
+    "detail connected to the relevant background ref. If the meeting did not state the " +
     "approach or the acceptance criteria, think the task through and DERIVE them (a numbered plan someone " +
     "could follow), then list what you derived in derived[] so the body marks it as proposed. Before " +
     "calling this, call paul_list(type=\"doc\") and pass background as at most 3 genuine matches, or an " +

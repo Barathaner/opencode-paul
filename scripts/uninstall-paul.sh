@@ -13,6 +13,8 @@
 #   - bashrc/zshrc source lines
 #   - project data in ~/opencode_automations/paul-*/
 #   - source repo at ~/paulrepo/opencode-paul/
+#   - stale drop-in copies: ~/.config/opencode/tools/paul.ts
+#   - profile commands: ~/.config/opencode/commands/paul-*.md
 #
 set -uo pipefail
 
@@ -201,7 +203,7 @@ else
 fi
 
 # --- 7. Source repo -----------------------------------------------------------
-hdr "7/8  Source repository"
+hdr "7/9  Source repository"
 
 if [ -d "$HOME/paulrepo/opencode-paul" ]; then
   if [ "$DRY_RUN" = "1" ]; then
@@ -213,8 +215,35 @@ else
   warn "source repo not found at ~/paulrepo/opencode-paul/"
 fi
 
-# --- 8. Final message ---------------------------------------------------------
-hdr "8/8  Done"
+# --- 8. Stale tool + command copies -------------------------------------------
+hdr "8/9  Stale tool & command copies"
+
+STALE_TOOL="$OPENCODE_DIR/tools/paul.ts"
+if [ -f "$STALE_TOOL" ]; then
+  if [ "$DRY_RUN" = "1" ]; then
+    say "Would delete stale drop-in copy: $STALE_TOOL"
+  else
+    rm -f "$STALE_TOOL" && ok "deleted stale drop-in copy: $STALE_TOOL"
+  fi
+else
+  warn "no stale tools/paul.ts to delete"
+fi
+
+PAUL_COMMANDS=$(find "$OPENCODE_DIR" -maxdepth 2 \( -path "*/commands/paul-*.md" -o -path "*/command/paul-*.md" \) -type f 2>/dev/null || true)
+if [ -n "$PAUL_COMMANDS" ]; then
+  for c in $PAUL_COMMANDS; do
+    if [ "$DRY_RUN" = "1" ]; then
+      say "Would delete command: $c"
+    else
+      rm -f "$c" && ok "deleted command: $c"
+    fi
+  done
+else
+  warn "no paul-* profile command files to delete"
+fi
+
+# --- 9. Final message ---------------------------------------------------------
+hdr "9/9  Done"
 
 if [ "$DRY_RUN" = "1" ]; then
   echo
