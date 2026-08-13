@@ -1,0 +1,29 @@
+{
+  "segments": [
+    { "start": 0.0, "end": 3.5, "text": "Alright, let's plan the garden party demo. The city event is confirmed for the 29th, and the organisers want us to headline the afternoon slot." },
+    { "start": 3.5, "end": 9.0, "text": "So the key decision: we play a robot versus human match. Three of our robots against a team of people trying to score on our goal. Everyone loved the idea, the human players are the enemies we defend against." },
+    { "start": 9.0, "end": 16.5, "text": "That changes the perception stack. Our robots are tuned for other robots — same height, same speed. Humans are taller, slower, and they move unpredictably. The leg detection will be the hard part." },
+    { "start": 16.5, "end": 23.0, "text": "Patrick, you worked on the goalie dive. Will the existing goalkeeper behaviour hold up against a human striker who can just walk around the dive?" },
+    { "start": 23.0, "end": 31.0, "text": "No, the hardcoded dive angle is tuned for a low ball kicked by a robot. A human can lob it or shoot from an angle. We need the dynamic dive from the ball trajectory — which is exactly the ticket that's still open. The garden party is now the deadline for it." },
+    { "start": 31.0, "end": 38.0, "text": "Okay so the dynamic goalie dive moves up. That was slated for next week anyway, but now it's critical before the 29th. Karl, you have the intercept work — does it conflict?" },
+    { "start": 38.0, "end": 46.0, "text": "The dive and the intercept both need trajectory prediction. I'll build the shared prediction module first, then the intercept reuses it and the goalie dive consumes the same output. That way we don't duplicate the math." },
+    { "start": 46.0, "end": 53.0, "text": "Action item then: Karl builds the shared trajectory prediction module this week, estimate three days. The goalie dive and the intercept both depend on it." },
+    { "start": 53.0, "end": 59.5, "text": "Also for the party we need a human detection mode. Right now the vision pipeline filters people out as noise. We need to invert that and track them as dynamic obstacles and as the ball carriers." },
+    { "start": 59.5, "end": 66.0, "text": "That's a real task. Human tracking, say two days, medium complexity. And it blocks the demo — without it we don't know where the striker is. I'll take it." },
+    { "start": 66.0, "end": 73.5, "text": "Good. And a decision on the rules: the humans get five minutes, they only need one goal to win, and the robots play a full defensive formation. The organisers want it to be exciting, not a foregone conclusion." },
+    { "start": 73.5, "end": 80.0, "text": "I like the one-goal rule, but the robots need to actually threaten. If we just park the bus the crowd gets bored. So the counter-attack behaviour needs to work: intercept the ball, then push forward with the dribbler." },
+    { "start": 80.0, "end": 87.0, "text": "That's a new task for the demo: counter-attack behaviour after interception, estimate one day, high priority. It builds on the intercept skill Karl is doing." },
+    { "start": 87.0, "end": 94.5, "text": "Stefan, what about the venue? It's a grass field in the park, not our indoor carpet. The wheels will slip and the odometry will drift. That hardware offset problem we saw before is going to be worse on grass." },
+    { "start": 94.5, "end": 100.0, "text": "The encoder recalibration won't survive grass. We should switch to visual odometry for the demo — use the field markings and the goal frame as anchors. That's a configuration change, half a day." },
+    { "start": 100.0, "end": 106.5, "text": "Make that a task too. Grass odometry via visual anchors, half a day, medium priority. It's a dependency for anything that moves on the day." },
+    { "start": 106.5, "end": 112.0, "text": "One more thing about the humans. There will be children at the party and the robots can sprint at their full speed. We need a safety mode that caps the drive speed when a person is closer than two meters." },
+    { "start": 112.0, "end": 118.0, "text": "Safety is non-negotiable. That's a high priority task: proximity-based speed limiting, two days, and it must be tested on a real field before the event." },
+    { "start": 118.0, "end": 124.0, "text": "Also questions for the scheduled check-in with the organisers next Tuesday: where exactly is the pitch, are we allowed to rope off the audience, and what is the weather backup if it rains." },
+    { "start": 124.0, "end": 130.0, "text": "I'll collect those into the meeting prep list. Also we should bring a spare set of batteries — the old ones sag after ten minutes and the robots slow down visibly." },
+    { "start": 130.0, "end": 136.0, "text": "Board cleanup: the old kick-strength calibration ticket is superseded by the new physics model, we can close it. And the RL training docs ticket stays on the backlog, it's not needed for the party." },
+    { "start": 136.0, "end": 142.0, "text": "Recap for the board: shared trajectory prediction three days, human tracking two days, counter-attack one day, grass odometry half a day, proximity safety two days, and the dynamic goalie dive is now critical before the 29th." },
+    { "start": 142.0, "end": 148.0, "text": "Dependencies: everything moves through the shared prediction module, and the counter-attack blocks on the intercept. The goalie dive and the intercept both consume the same trajectory output." },
+    { "start": 148.0, "end": 154.0, "text": "We'll do a full dress rehearsal on the grass three days before the party, and the safety mode gets its own field test first. Any objections?" },
+    { "start": 154.0, "end": 158.5, "text": "No objections. Let's get these on the board and I'll ping the organisers about the check-in." }
+  ]
+}

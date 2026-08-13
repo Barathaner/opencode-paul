@@ -856,9 +856,14 @@ jq \
   --arg uvx "$UVX_BIN" \
   --arg mcp_key "$MCP_KEY" \
   --arg token_ref "{env:$TOKEN_VAR}" \
+  --arg plugin_path "$REPO_DIR/plugin.ts" \
   '
   # 1) ensure plugin array contains the local paul plugin path + SDK-based one.
-  .plugin = ((.plugin // []) + ["opencode-paul"] | unique) |
+  #    "opencode-paul" as a bare name would resolve from npm, but it is not
+  #    published, so opencode silently fails to install it and no paul_* tools
+  #    register. Reference the local plugin.ts instead, and drop any stale
+  #    bare-name entry a previous setup wrote.
+  .plugin = (([.plugin // []][0] | map(select(. != "opencode-paul")) | . + [$plugin_path] | unique)) |
   # 2) ensure this profiles Atlassian server block (env token via {env:...}, never
   #    inline). Keyed per profile, so a second site adds a server instead of
   #    replacing the first ones.
@@ -879,9 +884,10 @@ jq \
   ' "$CONFIG" > "$TMP" && mv "$TMP" "$CONFIG"
 ok "updated $CONFIG (plugin + $MCP_KEY)"
 
-# NOTE: "opencode-paul" in the plugin array resolves from npm once published.
-# Until then the drop-in tools/paul.ts (installed in step 2) provides the tools,
-# so PAUL works immediately either way.
+# NOTE: The plugin is referenced by its local path ($REPO_DIR/plugin.ts) because
+# "opencode-paul" is not published to npm — a bare name makes opencode attempt an
+# npm install into ~/.cache/opencode/packages/opencode-paul@latest/, which 404s
+# and silently leaves no paul_* tools.
 
 # 5c. install the AGENTS.md behavior block (so the agent knows when to use PAUL).
 #
